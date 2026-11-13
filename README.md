@@ -3,6 +3,33 @@
 基于官方 `EasyTier/EasyTier` 的 `easytier-contrib/easytier-magisk` v2.7.0 改造。
 核心二进制未做任何改动，只补脚本层缺失的能力。
 
+> ## 🔧 v2.7.0-hs6：蜂窝日志根因修复 + 诊断排查套件 (Debug 版)
+>
+> 结合现场日志快照全面修复以下问题，并提供一键诊断套件：
+>
+> 1. **修复域名 peer 解析超时（DNS Resolve Timeout）**：
+>    - **根因**：原 `ensure_dns_rules` 依赖 `unbound_can_route` 探测，而 Android netd 默认给 root 的 `iif lo` 开放了具名表回退，导致脚本误判未绑定 socket 可以出网，跳过了 DNS 放行规则。结果 `easytier-core` 内部 `hickory-dns` 发送的 UDP 报文落入 netd unreachable，域名 peer 频繁报 `resolve timeout after 2s`。
+>    - **修复**：去除误判前置条件，并重写 `route_table_for_egress`，精准提取出口网卡（排除 `dummy0`）绑定的具名路由表号，稳定添加 `ip rule pref 79 to <dns>/32 lookup <表号>`。
+>
+> 2. **修复高通 DBS / 新版 Android 热点网卡识别失效**：
+>    - **根因**：在双 WiFi / DBS 机型（如 Redmi K60 等）上，热点 AP 网卡为 `wlan2` 或 `wlan1`，原正则仅匹配 `swlan*/softap*/ap*`，导致热点网卡匹配为空，未能开启 NAT 转发与 `rp_filter=2`。
+>    - **修复**：优先从 Android netd 自身的策略路由（`from all iif <dev> lookup <tbl>`）智能逆向提取真实热点网卡，备选正则扩展支持 `wlan[1-9]*`。
+>
+> 3. **多实例守护性能重构（切网重启从 3 分钟缩短至 2 秒）**：
+>    - **根因**：原 `pids_for_config` 在每轮检查中遍历 `/proc/[0-9]*/cmdline` 派生数千个 `tr` 子进程，造成巨大 CPU 负载与 20 秒/实例的启动延迟。
+>    - **修复**：引入 `.pid-*` 快速校验，命中即 O(1) 返回，消除进程扫描卡顿。
+>
+> 4. **后台防杀与防冻结保护**：
+>    - 为每个 `easytier-core` 进程写入 `oom_score_adj = -1000` 并加入前台 `cpuset`，防止在 MIUI/HyperOS（millet_kernel）等激进后台策略下被挂起或杀死。
+>
+> 5. **SELinux 审计风暴静音**：
+>    - 在 `service.sh` 中对 `ioctl(SIOCGIFINDEX)` 注入 `dontaudit`，彻底解决内核日志中数千万条 audit 溢出与系统卡顿问题。
+>
+> 6. **现场诊断与 Debug 版本**：
+>    - 运行 `dump_debug.sh`（或执行 `action.sh dump`）一键抓取网络、路由、iptables、进程与日志，脱敏后自动打包至 `/sdcard/easytier_debug.tar.gz`；
+>    - 支持 `action.sh debug` 动态切换调试日志（注入 `RUST_LOG=debug,easytier=trace`）；
+>    - `./build.sh` 现已支持一键编译 Release 版与内置 Debug 开关的 Debug 版。
+
 > ## 🔧 v2.7.0-hs5：修复「peer 连上了但 ping 不通 10.10.0.x」
 >
 > 新增一条策略路由规则，让 App 能访问 mesh 虚拟网段：

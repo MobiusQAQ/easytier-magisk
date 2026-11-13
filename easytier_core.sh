@@ -24,6 +24,8 @@ LOG_FILE="${MODDIR}/log.log"
 MODULE_PROP="${MODDIR}/module.prop"
 EASYTIER="${MODDIR}/easytier-core"
 HOTSPOT_CIDR_FILE="${MODDIR}/.hotspot_cidr"
+DEBUG_CONF="${CONFIG_DIR}/debug.conf"
+DEBUG_FLAG="${MODDIR}/enable_debug"
 
 BRAND=$(getprop ro.product.brand 2>/dev/null | tr ' ' '-')
 MODEL=$(getprop ro.product.model 2>/dev/null | tr ' ' '-')
@@ -35,7 +37,19 @@ ET_SOCKET_MARK=""
 COEXIST_ENABLE=0
 [ -f "$COEXIST_CONF" ] && . "$COEXIST_CONF" 2>/dev/null
 
+is_debug_mode() {
+    [ -f "$DEBUG_FLAG" ] && return 0
+    if [ -f "$DEBUG_CONF" ]; then
+        grep -qE '^[[:space:]]*DEBUG[[:space:]]*=[[:space:]]*[1-9]' "$DEBUG_CONF" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
 log() { echo "[ET] $(date '+%F %T') $1" >> "$LOG_FILE"; }
+debug_log() {
+    is_debug_mode || return 0
+    echo "[ET-DEBUG] $(date '+%F %T') $1" >> "$LOG_FILE"
+}
 
 # log.log 是只追加的事件日志，长期运行会无限增长。
 # 超过 256KB 时只保留最后 500 行（相当于滚动），避免塞满 /data。
@@ -114,33 +128,39 @@ count_core() {
     printf '%s' "$N"
 }
 
+# 快速判断单个 PID 是否对应目标配置
+pid_matches_config() {
+    PID="$1"; TARGET="$2"
+    [ -n "$PID" ] && [ -d "/proc/$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    CMD=$(tr '\000' ' ' < "/proc/$PID/cmdline" 2>/dev/null)
+    case "$CMD" in
+        *easytier-core*"-c ${TARGET} "*|*easytier-core*"-c ${TARGET}") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # 找出以某个配置文件启动的 easytier-core 进程 PID。
-# 直接扫 /proc/<pid>/cmdline 做精确匹配：
-#   - busybox pgrep 的 `-f` + 锚点/带尾空格的 pattern 行为不一致
-#     （`-c path$` 在 ERE 里会被当行尾锚点，而 busybox 不认），
-#     曾导致"以为实例没在跑"-> 重复拉起 -> 第二个进程报
-#     `failed to merge config from cli` 后退出。
-#   - /proc 方案不依赖任何 pattern 语义，最可靠。
+# 优化：
+#   1. 优先查 .pid-* 记录，命中即 O(1) 返回，彻底杜绝轮询遍历 /proc 带来的性能卡顿
+#   2. 兜底逐个检查 /proc/<pid>/cmdline
 pids_for_config() {
     TARGET="$1"
+    # 优先查 pid 缓存文件
+    for f in "${MODDIR}"/.pid-*; do
+        [ -f "$f" ] || continue
+        P=$(cat "$f" 2>/dev/null)
+        if pid_matches_config "$P" "$TARGET"; then
+            echo "$P"
+            return 0
+        fi
+    done
+
+    # 兜底：扫描 /proc
     for pdir in /proc/[0-9]*; do
         [ -r "${pdir}/cmdline" ] || continue
-        CMD=$(tr '\000' ' ' < "${pdir}/cmdline" 2>/dev/null)
-        [ -z "$CMD" ] && continue
-        # 必须是 easytier-core（cmdline 里出现即可）。
-        # 不用 readlink /proc/<pid>/exe 判断：某些环境（如被包装器 exec 时）
-        # exe 指向包装器而非 easytier-core，会导致匹配失败 ->
-        # 误判"实例没在跑" -> 重复拉起 -> 第二个进程 failed to listen。
-        case "$CMD" in
-            *easytier-core*) ;;
-            *) continue ;;
-        esac
-        # 精确匹配 "-c <目标配置>" 这个连续参数对
-        case "$CMD" in
-            *"-c ${TARGET} "*|*"-c ${TARGET}")
-                echo "${pdir#/proc/}"
-                ;;
-        esac
+        P="${pdir#/proc/}"
+        pid_matches_config "$P" "$TARGET" && echo "$P"
     done
 }
 
@@ -182,13 +202,24 @@ egress_iface() {
     # 技巧 1：优先 ip route get（快，且给出"此刻真的会走哪块"）
     D=$(ip route get 8.8.8.8 2>/dev/null \
         | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
-    [ -n "$D" ] && { printf '%s' "$D"; return 0; }
+    case "$D" in
+        et*|tun*|dummy*|lo|"") D="" ;;
+        *) printf '%s' "$D"; return 0 ;;
+    esac
 
-    # 技巧 2：Android 上 main 表往往是空的，默认路由在 netd 的具名表里，
-    # `ip route get` 会失败。这时扫所有表里的 default 路由来定网卡。
+    # 技巧 2：Android 上 main 表往往是空的，默认路由在 netd 的具名表里。
+    # 扫所有表里的 default 路由，排除虚拟/回环网卡。
     ip route show table all 2>/dev/null | awk '
         /^default/ {
-            for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }
+            for (i = 1; i < NF; i++) {
+                if ($i == "dev") {
+                    dev = $(i + 1)
+                    if (dev !~ /^(et|tun|dummy|lo)/) {
+                        print dev
+                        exit
+                    }
+                }
+            }
         }
     '
 }
@@ -369,38 +400,68 @@ flush_dns_rules() {
     : > "$DNS_RULES_FILE"
 }
 
-# 只有当「未绑定 socket 出不去」时才需要放行 DNS；
-# 否则系统本来就是通的，加了规则反而多事。
+# 确保每个配置的 DNS 服务器均有直达物理出口表的路由规则。
+# 根因修复：未绑定网卡的 hickory-dns UDP 请求会落到 32000 unreachable，
+# 导致全部域名 peer 报 resolve timeout 连不上。
 ensure_dns_rules() {
-    flush_dns_rules
     [ -f "${MODDIR}/disable_dns_rule" ] && return 0
-    unbound_can_route && return 0
 
     TBL=$(route_table_for_egress) || return 0
     [ -n "$TBL" ] || return 0
 
+    LAST_TBL=$(cat "${MODDIR}/.last_dns_table" 2>/dev/null)
+    if [ -n "$LAST_TBL" ] && [ "$TBL" != "$LAST_TBL" ]; then
+        flush_dns_rules
+    fi
+    printf '%s' "$TBL" > "${MODDIR}/.last_dns_table"
+
     N=0
     for ip in $(configured_dns_servers); do
+        if ip rule show 2>/dev/null | grep -qE "^${DNS_RULE_PREF}:.*to ${ip}([ /]|$)"; then
+            continue
+        fi
         if ip rule add pref "$DNS_RULE_PREF" to "${ip}/32" lookup "$TBL" 2>/dev/null; then
             printf '%s %s\n' "$DNS_RULE_PREF" "$ip" >> "$DNS_RULES_FILE"
             N=$((N + 1))
         fi
     done
-    [ "$N" -gt 0 ] && log "已放行 ${N} 个 DNS 服务器（table=${TBL}），修复域名 peer 解析"
+    [ "$N" -gt 0 ] && log "已放行 ${N} 个 DNS 服务器（table=${TBL}），修复域名 peer 解析超时"
     return 0
 }
 
-# 找到「有默认路由」的表名/表号，用于 DNS 放行
+# 找到当前物理出口网卡对应的具名/编号路由表，用于 DNS 放行
 route_table_for_egress() {
-    LINE=$(ip route show table all 2>/dev/null | grep '^default' | head -n1)
-    [ -n "$LINE" ] || return 1
-    T=$(printf '%s' "$LINE" | awk '{ for (i = 1; i < NF; i++) if ($i == "table") { print $(i + 1); exit } }')
-    if [ -z "$T" ]; then
-        # 没写 table 就是 main
-        printf 'main'
-    else
-        printf '%s' "$T"
+    CUR=$(egress_iface)
+    [ -n "$CUR" ] || return 1
+
+    # 优先：从路由表中查找绑定该网卡的 default 路由表
+    TBL=$(ip route show table all 2>/dev/null | awk -v d="$CUR" '
+        /^default/ {
+            is_dev = 0; tbl = ""
+            for (i = 1; i < NF; i++) {
+                if ($i == "dev" && $(i + 1) == d) is_dev = 1
+                if ($i == "table") tbl = $(i + 1)
+            }
+            if (is_dev) {
+                print (tbl != "" ? tbl : "main")
+                exit
+            }
+        }
+    ')
+    if [ -n "$TBL" ]; then
+        printf '%s' "$TBL"
+        return 0
     fi
+
+    # 兜底：从 ip rule 中查找匹配 oif $CUR 的表号
+    TBL=$(ip rule show 2>/dev/null | awk -v d="$CUR" '
+        $0 ~ ("oif " d) {
+            for (i = 1; i < NF; i++) if ($i == "lookup") { print $(i + 1); exit }
+        }
+    ' | head -n1)
+    [ -n "$TBL" ] && { printf '%s' "$TBL"; return 0; }
+
+    return 1
 }
 
 # ===== 每实例参数 =====
@@ -596,9 +657,27 @@ start_instance() {
         fi
     fi
 
+    # Debug 日志等级环境变量注入
+    ENV_EXTRA=""
+    if is_debug_mode; then
+        LVL="debug"
+        [ -f "$DEBUG_CONF" ] && LVL=$(awk -F= '/^[[:space:]]*CORE_LOG_LEVEL[[:space:]]*=/ {gsub(/["[:space:]]/, "", $2); print $2}' "$DEBUG_CONF" 2>/dev/null)
+        [ -z "$LVL" ] && LVL="debug"
+        ENV_EXTRA="RUST_LOG=${LVL},easytier=trace"
+        debug_log "实例 ${NAME} 注入环境变量: ${ENV_EXTRA}"
+    fi
+
     log "启动实例 ${NAME}: dev=${DEV:-auto}${EXTRA:+ | $EXTRA}"
-    TZ=Asia/Shanghai "$EASYTIER" $BASE_ARGS $EXTRA > "$LOG" 2>&1 &
-    echo $! > "${MODDIR}/.pid-${NAME}"
+    TZ=Asia/Shanghai env $ENV_EXTRA "$EASYTIER" $BASE_ARGS $EXTRA > "$LOG" 2>&1 &
+    PID=$!
+    echo $PID > "${MODDIR}/.pid-${NAME}"
+
+    # 进程优先级与防冻结保护（防止 Android 低内存 OOM 杀进程，或 MIUI/HyperOS millet 冻结）
+    echo -1000 > "/proc/$PID/oom_score_adj" 2>/dev/null
+    for cpuset in /dev/cpuset/foreground /dev/cpuset/top-app /sys/fs/cgroup/freezer; do
+        [ -w "${cpuset}/cgroup.procs" ] && echo $PID > "${cpuset}/cgroup.procs" 2>/dev/null
+        [ -w "${cpuset}/tasks" ] && echo $PID > "${cpuset}/tasks" 2>/dev/null
+    done
 }
 
 # ===== 主循环 =====
@@ -680,6 +759,10 @@ while true; do
     ensure_mesh_rules
 
     RUNNING=$(count_core)
+    if is_debug_mode; then
+        debug_log "心跳: 物理出口=${CUR_IFACE:-无}, 活跃实例=${RUNNING}/${NCFG}, 转发=${REDIR_STATUS}"
+    fi
+
     if [ "$RUNNING" -gt 0 ]; then
         update_module_description "运行中 ${RUNNING}/${NCFG} 个实例 | ${REDIR_STATUS}"
     else

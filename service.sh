@@ -11,6 +11,15 @@ done
 # 防止系统挂起
 echo "PowerManagerService.noSuspend" > /sys/power/wake_lock
 
+# 修复 SELinux ioctl(SIOCGIFINDEX) 产生的海量 AVC 拒绝审计日志（缓解 CPU 占用与日志刷屏）
+if command -v magiskpolicy >/dev/null 2>&1; then
+    magiskpolicy --live "allow { su ksu magisk } { su ksu magisk } unix_dgram_socket { ioctl read write }" 2>/dev/null
+    magiskpolicy --live "dontaudit { su ksu magisk } { su ksu magisk } unix_dgram_socket ioctl" 2>/dev/null
+elif command -v supolicy >/dev/null 2>&1; then
+    supolicy --live "allow ksu ksu unix_dgram_socket ioctl" 2>/dev/null
+    supolicy --live "dontaudit ksu ksu unix_dgram_socket ioctl" 2>/dev/null
+fi
+
 # 修改模块描述
 sed -i 's/$(description=)$[^"]*/\1[状态]关闭中/' "$MODDIR/module.prop"
 

@@ -2,6 +2,31 @@
 MODDIR=${0%/*}
 MODULE_PROP="${MODDIR}/module.prop"
 IP_RULE_SCRIPT="${MODDIR}/hotspot_iprule.sh"
+DUMP_SCRIPT="${MODDIR}/dump_debug.sh"
+DEBUG_FLAG="${MODDIR}/enable_debug"
+DEBUG_CONF="${MODDIR}/config/debug.conf"
+
+ACTION="$1"
+
+# 支持 action.sh dump 一键打包诊断信息
+if [ "$ACTION" = "dump" ]; then
+    chmod +x "$DUMP_SCRIPT" 2>/dev/null
+    exec "$DUMP_SCRIPT"
+fi
+
+# 支持 action.sh debug 快速切换调试模式
+if [ "$ACTION" = "debug" ]; then
+    if [ -f "$DEBUG_FLAG" ]; then
+        rm -f "$DEBUG_FLAG"
+        [ -f "$DEBUG_CONF" ] && sed -i 's/^DEBUG=.*/DEBUG=0/' "$DEBUG_CONF"
+        echo "[EasyTier] 调试模式已关闭"
+    else
+        touch "$DEBUG_FLAG"
+        [ -f "$DEBUG_CONF" ] && sed -i 's/^DEBUG=.*/DEBUG=1/' "$DEBUG_CONF"
+        echo "[EasyTier] 调试模式已激活 (RUST_LOG=debug,easytier=trace)"
+    fi
+    exit 0
+fi
 
 ET_STATUS=""
 REDIR_STATUS=""

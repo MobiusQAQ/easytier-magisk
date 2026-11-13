@@ -40,11 +40,39 @@ get_tun_iface() {
     ip link | awk -F': ' '/ tun[[:alnum:]]+/ {print $2; exit}'
 }
 get_hot_iface() {
-    # 冒号不要写成 \:（busybox awk 会报 "非法转义序列" 并可能匹配失败）
-    ip link | awk -F': ' '/(^| )(swlan[[:alnum:]_]*|softap[[:alnum:]_]*|p2p-wlan[[:alnum:]_]*|ap[[:alnum:]_]*):/ {print $2; exit}' | cut -d'@' -f1 | head -n1
+    # 策略 1：从 Android netd 的 tethering 策略路由反查（最准确，覆盖所有机型）
+    # netd 开启热点后会固定添加形如：21000: from all iif <dev> lookup <tbl>
+    NETD_HOT=$(ip rule show 2>/dev/null | awk '
+        /from all iif [^ ]+ lookup/ {
+            for (i = 1; i < NF; i++) {
+                if ($i == "iif") {
+                    dev = $(i + 1)
+                    if (dev !~ /^(lo|dummy|et|tun|rmnet)/) {
+                        print dev
+                        exit
+                    }
+                }
+            }
+        }
+    ')
+    if [ -n "$NETD_HOT" ] && ip link show "$NETD_HOT" >/dev/null 2>&1; then
+        printf '%s' "$NETD_HOT"
+        return 0
+    fi
+
+    # 策略 2：正则匹配所有已知 Wi-Fi 热点接口名
+    # 包括高通双 WiFi DBS (wlan1/wlan2)、MTK (ap0/ap1)、原生 softap/swlan
+    ip link | awk -F': ' '
+        /(^| )(swlan[[:alnum:]_]*|softap[[:alnum:]_]*|p2p-wlan[[:alnum:]_]*|ap[[:alnum:]_]*|wlan[1-9][[:alnum:]_]*):/ {
+            dev = $2
+            sub(/@.*/, "", dev)
+            print dev
+            exit
+        }
+    '
 }
 get_usb_iface() {
-    ip link | awk -F': ' '/(^| )(usb[[:alnum:]_]*|rndis[[:alnum:]_]*|eth[[:alnum:]_]*):/ {print $2; exit}' | cut -d'@' -f1 | head -n1
+    ip link | awk -F': ' '/(^| )(usb[[:alnum:]_]*|rndis[[:alnum:]_]*|eth[[:alnum:]_]*|ncm[[:alnum:]_]*):/ {print $2; exit}' | cut -d'@' -f1 | head -n1
 }
 get_hot_cidr() {
     [ -n "$1" ] || return 0
