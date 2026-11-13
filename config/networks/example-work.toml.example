@@ -1,0 +1,22 @@
+# ===== 实例：example-work =====
+# 与 example-main 并行的第二个网络。端口、网段必须不同。
+
+hostname = "my-phone-work"
+ipv4 = "10.144.144.1/24"
+
+listeners = [
+    "tcp://0.0.0.0:11020",
+    "udp://0.0.0.0:11020",
+]
+
+[network_identity]
+network_name = "my-work-network"
+network_secret = "change-me-too"
+
+[[peer]]
+uri = "tcp://another.relay.top:11010"
+
+[flags]
+default_protocol = "tcp"
+enable_encryption = true
+mtu = 1380

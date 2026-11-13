@@ -1,0 +1,19 @@
+# Build output
+dist/
+*.zip
+
+# Logs and runtime status files
+*.log
+core-*.log
+log.log
+
+# Module toggle switches
+disable_bind_device
+disable_dns_rule
+disable_mesh_route
+
+# Backups and editor files
+*.bak
+*.swp
+*~
+.DS_Store

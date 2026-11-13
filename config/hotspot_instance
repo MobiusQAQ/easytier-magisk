@@ -1,0 +1,4 @@
+# 指定哪个实例作为热点出口（写实例名 = config/networks/ 下的文件名去掉 .toml）
+# 留空或删除本文件则默认用第一个实例（按文件名排序）
+# 只有这个实例会被注入热点网段到 --proxy-networks
+example-main

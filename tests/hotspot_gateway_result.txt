@@ -1,0 +1,39 @@
+===== [1] 手机A 的 main 路由表 =====
+10.99.0.0/24 dev ph-pub proto kernel scope link src 10.99.0.1 
+10.126.126.0/24 dev tun0 proto kernel scope link src 10.126.126.1 
+===== [2] mesh里B 的 tun 地址 =====
+tun0             UNKNOWN        10.126.126.2/24 fe80::3a37:fd8f:6ae9:183e/64 
+===== [3] A/B 是否建立 mesh peer =====
+| ipv4            | hostname | cost  | lat(ms) | loss | rx      | tx      | tunnel | NAT     | version        |
+|-----------------|----------|-------|---------|------|---------|---------|--------|---------|----------------|
+| 10.126.126.1/24 | A        | Local | -       | -    | -       | -       | -      | Unknown | 2.7.0-8b7f1f01 |
+| 10.126.126.2/24 | B        | p2p   | 0.06    | 0.0% | 1.30 kB | 1.48 kB | tcp    | Unknown | 2.7.0-8b7f1f01 |
+--- A.log 尾 ---
+2026-11-02T06:37:05.861Z INFO  CORE::INSTANCE::CONNECTION: [4d383c25-5404-42a5-9247-82e56a1c3823] connecting to peer dst=tcp://10.99.0.2:11010
+2026-11-02T06:37:05.861Z INFO  CORE::INSTANCE::CONNECTION: [4d383c25-5404-42a5-9247-82e56a1c3823] new peer connection added conn_info=PeerConnInfo { my_peer_id: 2931359167, dst_peer_id: 542907361, tunnel_info: Some(TunnelInfo { tunnel_type: "tcp", local_addr: Some(Url { url: "tcp://10.99.0.1:37629" }), remote_addr: Some(Url { url: "tcp://10.99.0.2:11010" }), resolved_remote_addr: Some(Url { url: "tcp://10.99.0.2:11010" }) }) }
+2026-11-02T06:37:05.861Z INFO  CORE::INSTANCE: [4d383c25-5404-42a5-9247-82e56a1c3823] new peer added peer_id=542907361
+===== [4] 关键实验: 热点client -> 内网B(10.126.126.2) ping =====
+64 bytes from 10.126.126.2: icmp_seq=3 ttl=63 time=0.335 ms
+64 bytes from 10.126.126.2: icmp_seq=4 ttl=63 time=1.64 ms
+
+--- 10.126.126.2 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3045ms
+rtt min/avg/max/mdev = 0.335/1.390/3.223/1.181 ms
+===== [5] 对照: rp_filter 严格(=1) 后 ping =====
+
+--- 10.126.126.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2031ms
+rtt min/avg/max/mdev = 0.313/0.412/0.472/0.070 ms
+===== [6] 去掉 MASQUERADE(源IP=192.168.43.100 裸奔) 会怎样 =====
+
+--- 10.126.126.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2035ms
+rtt min/avg/max/mdev = 0.365/0.419/0.506/0.062 ms
+===== [7] 回环: client ping 手机自己 192.168.43.1 =====
+2 packets transmitted, 2 received, 0% packet loss, time 1021ms
+rtt min/avg/max/mdev = 0.022/0.093/0.164/0.071 ms
+===== [8] B.log 尾 =====
+2026-11-02T06:37:05.861Z INFO  CORE::INSTANCE::CONNECTION: [35850b54-fa9b-4e33-906e-0b98838336fd] new peer connection added conn_info=PeerConnInfo { my_peer_id: 542907361, dst_peer_id: 2931359167, tunnel_info: Some(TunnelInfo { tunnel_type: "tcp", local_addr: Some(Url { url: "tcp://0.0.0.0:11010" }), remote_addr: Some(Url { url: "tcp://10.99.0.1:37629" }), resolved_remote_addr: Some(Url { url: "tcp://10.99.0.1:37629" }) }) }
+2026-11-02T06:37:05.861Z INFO  CORE::INSTANCE: [35850b54-fa9b-4e33-906e-0b98838336fd] new peer added peer_id=2931359167
+2026-11-02T06:37:06.260Z INFO  CORE::INSTANCE: [35850b54-fa9b-4e33-906e-0b98838336fd] proxy CIDRs updated added=[192.168.43.0/24] removed=[]
+DONE

@@ -1,0 +1,38 @@
+# ===== 实例：example-main =====
+# 每个 .toml 文件 = 一个独立的 EasyTier 网络实例（独立进程）
+# 文件名去掉 .toml 就是实例名，可在 config/hotspot_instance 里引用
+#
+# 模块会自动补全以下字段（无需手写，写了就用你的）：
+#   dev_name      -> et0 / et1 / ...（自动避开冲突）
+#   instance_name -> 文件名
+#   rpc_portal    -> 127.0.0.1:1588<N>
+#   hostname      -> 设备型号
+#
+# ⚠️ 多个实例之间必须注意：
+#   - listeners 端口不能重复
+#   - ipv4 网段不能重复
+#   - dev_name / instance_name / rpc_portal 重复会自动处理
+
+hostname = "my-phone-main"
+ipv4 = "10.126.126.1/24"
+
+listeners = [
+    "tcp://0.0.0.0:11010",
+    "udp://0.0.0.0:11010",
+]
+
+# 子网代理网段用这个语法（顶层 proxy_networks = [...] 会被内核丢弃）
+# [[proxy_network]]
+# cidr = "192.168.1.0/24"
+
+[network_identity]
+network_name = "my-network"
+network_secret = "change-me-please"
+
+[[peer]]
+uri = "tcp://public.easytier.top:11010"
+
+[flags]
+default_protocol = "tcp"
+enable_encryption = true
+mtu = 1380
