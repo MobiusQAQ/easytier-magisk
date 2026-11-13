@@ -477,6 +477,43 @@ grep "绑定物理网卡" /data/adb/modules/easytier_magisk/log.log
 | `uninstall.sh` | **hs4**：清理 DNS 放行规则 |
 | `module.prop` | 版本改 `v2.7.0-hs5`，移除 `updateJson`（防官方更新覆盖改造） |
 
+## 📦 模块打包与 GitHub Releases 自动发布
+
+### 1. 本地打包构建
+
+项目提供 [`build.sh`](file:///home/thtf/ws/easytier-magisk/build.sh) 快速打包 Magisk 模块 Zip：
+
+```bash
+# 同时编译标准发布包与调试包（生成至 dist/ 目录并自动计算 SHA256）
+./build.sh all
+
+# 仅编译标准发布包 (Easytier-Magisk-v<version>.zip)
+./build.sh release
+
+# 仅编译 Debug 调试包 (Easytier-Magisk-v<version>-debug.zip)
+./build.sh debug
+```
+
+构建产物自动存放在 `dist/` 目录下，并生成 `dist/SHA256SUMS.txt` 校验和。
+
+### 2. 一键发布到 GitHub Releases
+
+本地通过 `gh` CLI 一键打 Tag 并发布到 GitHub Releases：
+
+```bash
+# 自动执行回归测试 -> 构建双版本 -> 生成校验和 -> 创建 Git Tag -> 上传 Release 资产
+./build.sh publish
+```
+
+### 3. GitHub Actions 自动化 CI/CD
+
+仓库配置了 [`.github/workflows/release.yml`](file:///home/thtf/ws/easytier-magisk/.github/workflows/release.yml)：
+- 当向远程推送版本标签（如 `git push origin v2.7.0-hs6`）时，GitHub Actions 会自动触发；
+- 自动化运行测试、打包标准版与 Debug 版、计算 SHA256 校验和；
+- 自动创建并发布 GitHub Release，将模块资产挂载供用户直接在 Magisk / KernelSU / APatch 中刷入。
+
+---
+
 ## WebUI / 手动配置（保留官方行为）
 
 KernelSU 等支持模块 WebUI 的管理器可从模块详情页打开配置界面；
