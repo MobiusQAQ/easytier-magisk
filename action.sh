@@ -14,6 +14,20 @@ if [ "$ACTION" = "dump" ]; then
     exec "$DUMP_SCRIPT"
 fi
 
+# 支持 action.sh peer 查看所有实例加入的 peer 状态
+if [ "$ACTION" = "peer" ] || [ "$ACTION" = "peers" ]; then
+    shift
+    chmod +x "${MODDIR}/easytier-cli" 2>/dev/null
+    exec sh "${MODDIR}/easytier-cli" peer "$@"
+fi
+
+# 支持 action.sh status / route / node 等终端快捷命令
+if [ "$ACTION" = "status" ] || [ "$ACTION" = "route" ] || [ "$ACTION" = "node" ]; then
+    shift
+    chmod +x "${MODDIR}/easytier-cli" 2>/dev/null
+    exec sh "${MODDIR}/easytier-cli" "$ACTION" "$@"
+fi
+
 # 支持 action.sh debug 快速切换调试模式
 if [ "$ACTION" = "debug" ]; then
     if [ -f "$DEBUG_FLAG" ]; then

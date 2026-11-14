@@ -1,0 +1,10 @@
+#!/system/bin/sh
+# EasyTier Magisk terminal entrypoint
+for d in /data/adb/modules/easytier_magisk /data/adb/modules_update/easytier_magisk; do
+    if [ -f "$d/easytier-cli" ]; then
+        exec /system/bin/sh "$d/easytier-cli" "$@"
+    fi
+done
+
+echo "[EasyTier] 错误: 未找到 EasyTier 模块目录 (/data/adb/modules/easytier_magisk)" >&2
+exit 1

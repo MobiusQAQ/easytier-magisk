@@ -1,6 +1,6 @@
 id=easytier_magisk
 name=EasyTier_Magisk (Hotspot+TPROXY)
-version=v2.7.0-hs6
-versionCode=270006
+version=v2.7.0-hs7
+versionCode=270007
 author=EasyTier / hotspot patch
-description=[状态] 未启动 | 多网络实例版。配置：config/networks/*.toml（每文件一个独立网络，可并行），热点共享内网(ip_forward/rp_filter/MASQUERADE)，可选 TPROXY 共存，附带现场诊断工具 dump_debug.sh
+description=[状态] 未启动 | 多网络实例版。终端执行 easytier-cli peer 或 easytier peer 查看所有节点状态；配置：config/networks/*.toml（每文件一独立网络），热点共享内网(ip_forward/rp_filter/MASQUERADE)，可选 TPROXY 共存，附带现场诊断工具 dump_debug.sh

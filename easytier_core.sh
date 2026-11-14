@@ -511,7 +511,18 @@ write_instances() {
 
         if is_args_config "$cfg"; then
             DEV=$(get_tun_iface_lazy)
-            printf '%s\t%s\t%s\n' "$name" "$DEV" "$cfg" >> "$TMP"
+            RPC=$(awk '
+                {
+                    for (i=1; i<=NF; i++) {
+                        if ($i == "-r" || $i == "--rpc-portal") {
+                            print $(i+1)
+                            exit
+                        }
+                    }
+                }
+            ' "$cfg" 2>/dev/null)
+            [ -z "$RPC" ] && RPC="127.0.0.1:15888"
+            printf '%s\t%s\t%s\t%s\n' "$name" "$DEV" "$cfg" "$RPC" >> "$TMP"
             continue
         fi
 
@@ -527,7 +538,11 @@ write_instances() {
             done
             [ -z "$DEV" ] && DEV="et${IDX}"
         fi
-        printf '%s\t%s\t%s\n' "$name" "$DEV" "$cfg" >> "$TMP"
+
+        RPC=$(toml_get "$cfg" rpc_portal)
+        [ -z "$RPC" ] && RPC="127.0.0.1:1588$((IDX - 1))"
+
+        printf '%s\t%s\t%s\t%s\n' "$name" "$DEV" "$cfg" "$RPC" >> "$TMP"
     done < "$LISTF"
 
     rm -f "$LISTF"
@@ -541,6 +556,11 @@ get_tun_iface_lazy() {
 # 该名字是否已在 .instances 里
 instance_dev() {
     awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$INSTANCES_FILE" 2>/dev/null
+}
+
+# 该名字对应的 RPC 地址
+instance_rpc() {
+    awk -F'\t' -v n="$1" '$1 == n { print $4; exit }' "$INSTANCES_FILE" 2>/dev/null
 }
 
 # ===== 模块描述 =====
@@ -610,17 +630,21 @@ start_instance() {
         [ -z "$DEV" ] && DEV=$(instance_dev "$NAME")
         INST=$(toml_get "$CFG" instance_name)
         [ -z "$INST" ] && INST="$NAME"
-        RPC=$(toml_get "$CFG" rpc_portal)
-
-        BASE_ARGS="-c $CFG"
-        # rpc_portal 缺省时按序号分配，避免多实例共用 15888
+        RPC=$(instance_rpc "$NAME")
+        [ -z "$RPC" ] && RPC=$(toml_get "$CFG" rpc_portal)
         if [ -z "$RPC" ]; then
             IDX=0
             for n in $(list_configs | cut -f1); do
                 IDX=$((IDX + 1))
                 [ "$n" = "$NAME" ] && break
             done
-            BASE_ARGS="$BASE_ARGS -r 127.0.0.1:1588$((IDX - 1))"
+            RPC="127.0.0.1:1588$((IDX - 1))"
+        fi
+
+        BASE_ARGS="-c $CFG"
+        # 只要 toml 没显式声明 rpc_portal，注入分配的 -r 参数
+        if [ -z "$(toml_get "$CFG" rpc_portal)" ]; then
+            BASE_ARGS="$BASE_ARGS -r $RPC"
         fi
         [ -n "$DEV" ] && BASE_ARGS="$BASE_ARGS --dev-name $DEV"
         BASE_ARGS="$BASE_ARGS -m $INST"

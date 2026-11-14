@@ -3,6 +3,20 @@
 基于官方 `EasyTier/EasyTier` 的 `easytier-contrib/easytier-magisk` v2.7.0 改造。
 核心二进制未做任何改动，只补脚本层缺失的能力。
 
+> ## 💻 v2.7.0-hs7：终端 peer 状态一键查看与全局 CLI 工具
+>
+> 解决终端中无法直接执行 `easytier-cli peer` 或多网络实例下端口需手动指定的痛点：
+>
+> 1. **系统全局终端命令 (`/system/bin/easytier-cli` & `easytier`)**：
+>    - 模块自动挂载到 `/system/bin`，任何终端（Termux、MT 管理器终端、ADB Shell）执行 `su` 后可直接运行 `easytier-cli` 或 `easytier`。
+> 2. **智能多实例聚合展示**：
+>    - 运行 `easytier-cli peer`（或快捷别名 `easytier peer`），自动识别所有并行运行的网络实例，逐一展示各实例网卡、虚拟 IP、RPC 端口及对应加入了的 Peer 节点表格（类似原版单机输出）。
+>    - 支持通过 `-i <实例名>` 仅查看某个特定实例（如 `easytier peer -i work`）。
+> 3. **实例运行概览总览**：
+>    - 运行 `easytier status`，一行表格直观显示所有网络实例的网卡、虚拟 IP、RPC 端口、PID 和在线 Peer 连接数。
+> 4. **免重启现场查看**：
+>    - 支持直接执行 `/data/adb/modules/easytier_magisk/action.sh peer` 现场查看。
+>
 > ## 🔧 v2.7.0-hs6：蜂窝日志根因修复 + 诊断排查套件 (Debug 版)
 >
 > 结合现场日志快照全面修复以下问题，并提供一键诊断套件：
@@ -252,18 +266,32 @@ echo main > /data/adb/modules/easytier_magisk/config/hotspot_instance
 
 这样一个热点只有一条确定的出口路径，避免多出口造成路由歧义。
 
-### 状态查看
+### 状态查看（终端命令行）
+
+现在可在任何终端（Termux / MT 管理器 / ADB Shell）获得类似原版 `easytier-cli` 的完整体验：
 
 ```bash
-# 实例名 ↔ tun ↔ 配置文件 对应关系
-cat /data/adb/modules/easytier_magisk/.instances
-# 输出：实例名 <TAB> tun <TAB> 配置路径
+# 1. 查看所有实例加入的 Peer 节点状态（自动聚合多网络实例）
+easytier-cli peer
+# 或快捷别名：
+easytier peer
 
-# 每个实例独立的 core 日志
-ls /data/adb/modules/easytier_magisk/core-*.log
+# 2. 仅查看指定实例的 Peer 状态
+easytier peer -i default
+easytier peer -i work
 
-# 单实例查询（rpc_portal 自动分配，见启动参数或 .instances）
-/data/adb/modules/easytier_magisk/easytier-cli -p 127.0.0.1:15880 node
+# 3. 查看模块所有网络实例运行总览表（网卡、虚拟 IP、RPC 端口、PID、Peer 数量）
+easytier status
+
+# 4. 查看所有实例的路由表与本地节点信息
+easytier-cli route
+easytier-cli node
+
+# 5. 免重启现场查看（如刚更新模块尚未重启手机）
+/data/adb/modules/easytier_magisk/action.sh peer
+
+# 6. 单实例精确查询或自定义 RPC 地址（完全兼容原生 CLI 参数）
+easytier-cli -p 127.0.0.1:15880 peer
 ```
 
 模块描述会实时显示 `运行中 N/M 个实例`。

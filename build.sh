@@ -95,10 +95,12 @@ publish_release() {
     fi
 
     # 运行回归测试
-    if [ -f "${SCRIPT_DIR}/tests/regression_hs6_test.sh" ]; then
-        echo "==> Running regression tests before publishing..."
-        bash "${SCRIPT_DIR}/tests/regression_hs6_test.sh"
-    fi
+    for t in "${SCRIPT_DIR}/tests"/regression_*.sh "${SCRIPT_DIR}/tests"/peer_cli_test.sh; do
+        if [ -f "$t" ]; then
+            echo "==> Running test: $(basename "$t")..."
+            bash "$t"
+        fi
+    done
 
     # 构建所有包并生成校验码
     build_release "${target_ver}" 0

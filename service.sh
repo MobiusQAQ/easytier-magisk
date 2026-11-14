@@ -2,6 +2,7 @@
 MODDIR=${0%/*}
 # MODDIR="$(dirname $(readlink -f "$0"))"
 chmod 755 ${MODDIR}/*
+chmod -R 755 ${MODDIR}/system/bin 2>/dev/null
 
 # 等待系统启动成功
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
