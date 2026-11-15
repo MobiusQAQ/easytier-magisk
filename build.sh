@@ -66,7 +66,7 @@ build_release() {
     # 打包（排除源码控制、测试文件与 CI/CD 配置）
     (
         cd "$tmp_dir"
-        zip -r9 "$output_path" . \
+        zip -r9y "$output_path" . \
             -x ".git/*" \
             -x ".github/*" \
             -x ".gitignore" \

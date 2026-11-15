@@ -2,6 +2,17 @@
 # EasyTier Magisk CLI 智能客户端包装器
 # 支持在终端直接运行 easytier-cli / easytier 查看加入的所有 peer 状态
 # 自动探测单网络/多网络实例并路由到对应的 RPC 端口
+# 兼容 Termux、KernelSU、APatch、Magisk 各种终端与环境
+
+# 0. 若在终端中由非 root 用户（例如普通 Termux 用户）直接执行，自动尝试提权执行
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v su >/dev/null 2>&1 || [ -x /system/bin/su ]; then
+        exec su 0 /system/bin/sh "$0" "$@" 2>/dev/null \
+            || exec su -c "exec /system/bin/sh '$0' $(for a in "$@"; do printf '%s ' "$a"; done)"
+    fi
+    echo "[EasyTier] 错误: 需要 root 权限以访问 EasyTier 模块，请先执行 su" >&2
+    exit 1
+fi
 
 # 1. 定位模块主目录
 SCRIPT_DIR=$(CDPATH= cd "${0%/*}" 2>/dev/null && pwd -P)
@@ -83,9 +94,11 @@ if [ "$1" = "-V" ] || [ "$1" = "--version" ]; then
     exec "$REAL_CLI" --version
 fi
 
-# 4. 解析包装器专属选项 (-i / --instance 等)
+# 4. 解析包装器专属选项 (-i / --instance 等) 并分离全局参数与子命令
 FILTER_INSTANCE=""
-CLI_ARGS=""
+GLOBAL_OPTS=""
+SUBCOMMAND=""
+EXTRA_ARGS=""
 IS_JSON=0
 
 while [ "$#" -gt 0 ]; do
@@ -100,27 +113,44 @@ while [ "$#" -gt 0 ]; do
             FILTER_INSTANCE="${1#*=}"
             ;;
         -o|--output)
-            CLI_ARGS="${CLI_ARGS} $1"
+            GLOBAL_OPTS="${GLOBAL_OPTS} $1"
             shift
             if [ "$#" -gt 0 ]; then
-                CLI_ARGS="${CLI_ARGS} $1"
+                GLOBAL_OPTS="${GLOBAL_OPTS} $1"
                 [ "$1" = "json" ] && IS_JSON=1
             fi
             ;;
-        --output=json)
-            CLI_ARGS="${CLI_ARGS} $1"
-            IS_JSON=1
+        --output=*)
+            GLOBAL_OPTS="${GLOBAL_OPTS} $1"
+            [ "${1#*=}" = "json" ] && IS_JSON=1
+            ;;
+        --no-trunc|-v|--verbose)
+            GLOBAL_OPTS="${GLOBAL_OPTS} $1"
+            ;;
+        status|list)
+            SUBCOMMAND="status"
+            ;;
+        peer|route|node|connector|mapped-listener|stun|peer-center|vpn-portal|proxy|acl|port-forward|whitelist|stats|logger)
+            if [ -z "$SUBCOMMAND" ]; then
+                SUBCOMMAND="$1"
+            else
+                EXTRA_ARGS="${EXTRA_ARGS} $1"
+            fi
             ;;
         *)
-            CLI_ARGS="${CLI_ARGS} $1"
+            if [ -z "$SUBCOMMAND" ]; then
+                SUBCOMMAND="$1"
+            else
+                EXTRA_ARGS="${EXTRA_ARGS} $1"
+            fi
             ;;
     esac
     shift
 done
 
-# 规范化参数，去除首尾空白
-CLI_ARGS=$(echo "$CLI_ARGS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-[ -z "$CLI_ARGS" ] && CLI_ARGS="peer"
+[ -z "$SUBCOMMAND" ] && SUBCOMMAND="peer"
+GLOBAL_OPTS=$(echo "$GLOBAL_OPTS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+EXTRA_ARGS=$(echo "$EXTRA_ARGS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
 # 5. 从 toml 文件提取指定键值的辅助函数
 toml_get() {
@@ -136,6 +166,18 @@ toml_get() {
             exit
         }
     ' "$1" 2>/dev/null
+}
+
+# 规范化 RPC 地址（将 0.0.0.0 / [::] / 空前缀替换为 127.0.0.1）
+normalize_rpc() {
+    local rpc="$1"
+    local def="$2"
+    [ -z "$rpc" ] && rpc="$def"
+    case "$rpc" in
+        0.0.0.0:*|\[::\]:*) rpc="127.0.0.1:${rpc##*:}" ;;
+        :*) rpc="127.0.0.1:${rpc##*:}" ;;
+    esac
+    printf '%s' "$rpc"
 }
 
 # 6. 获取虚拟 IP
@@ -164,8 +206,8 @@ collect_instances() {
             idx=$((idx + 1))
             if [ -z "$irpc" ]; then
                 irpc=$(toml_get "$icfg" rpc_portal)
-                [ -z "$irpc" ] && irpc="127.0.0.1:1588$((idx - 1))"
             fi
+            irpc=$(normalize_rpc "$irpc" "127.0.0.1:1588$((idx - 1))")
             local pid=""
             if [ -f "${MODDIR}/.pid-${iname}" ]; then
                 pid=$(cat "${MODDIR}/.pid-${iname}" 2>/dev/null | tr -d ' \r\n')
@@ -185,7 +227,7 @@ collect_instances() {
             iname=$(basename "$f" .toml | tr -c 'A-Za-z0-9_-' '_' | cut -c1-32)
             local irpc
             irpc=$(toml_get "$f" rpc_portal)
-            [ -z "$irpc" ] && irpc="127.0.0.1:1588$((idx - 1))"
+            irpc=$(normalize_rpc "$irpc" "127.0.0.1:1588$((idx - 1))")
             local idev
             idev=$(toml_get "$f" dev_name)
             [ -z "$idev" ] && idev="et$((idx - 1))"
@@ -207,7 +249,7 @@ collect_instances() {
     if [ -f "$LEGACY_CONFIG" ]; then
         local irpc
         irpc=$(toml_get "$LEGACY_CONFIG" rpc_portal)
-        [ -z "$irpc" ] && irpc="127.0.0.1:15880"
+        irpc=$(normalize_rpc "$irpc" "127.0.0.1:15888")
         local idev
         idev=$(toml_get "$LEGACY_CONFIG" dev_name)
         [ -z "$idev" ] && idev="et0"
@@ -219,7 +261,7 @@ collect_instances() {
 }
 
 # 8. 执行 status 总览命令
-if [ "$CLI_ARGS" = "status" ] || [ "$CLI_ARGS" = "list" ]; then
+if [ "$SUBCOMMAND" = "status" ]; then
     echo "================================================================================"
     echo " EasyTier 模块运行状态总览"
     echo "================================================================================"
@@ -294,7 +336,7 @@ COUNT=$(echo "$INST_LIST" | wc -l | tr -d ' ')
 # 单实例且请求 JSON 输出时，直接原生无修饰输出
 if [ "$COUNT" -eq 1 ] && [ "$IS_JSON" = "1" ]; then
     irpc=$(echo "$INST_LIST" | cut -f4)
-    exec "$REAL_CLI" -p "$irpc" $CLI_ARGS
+    exec "$REAL_CLI" -p "$irpc" $GLOBAL_OPTS $SUBCOMMAND $EXTRA_ARGS
 fi
 
 # 遍历所有目标实例输出状态
@@ -312,8 +354,8 @@ echo "$INST_LIST" | while IFS="$(printf '\t')" read -r iname idev icfg irpc ipid
         echo "================================================================================"
     fi
 
-    # 调用真实 CLI
-    if ! "$REAL_CLI" -p "$irpc" $CLI_ARGS; then
+    # 调用真实 CLI (保证选项在子命令之前)
+    if ! "$REAL_CLI" -p "$irpc" $GLOBAL_OPTS $SUBCOMMAND $EXTRA_ARGS; then
         if [ "$IS_JSON" = "0" ]; then
             echo "[提示] 实例 '${iname}' (${irpc}) 暂时无法连接，可能核心尚未启动或正在重启中。"
         fi

@@ -53,5 +53,10 @@ while [ $i -lt 8 ] && ip rule show 2>/dev/null | grep -q 'fwmark 0x4e54'; do
     i=$((i + 1))
 done
 
+# 5) 清理终端工具包装器与软链接
+rm -f /data/data/com.termux/files/usr/bin/easytier-cli /data/data/com.termux/files/usr/bin/easytier 2>/dev/null
+rm -f /data/adb/ksu/bin/easytier-cli /data/adb/ksu/bin/easytier 2>/dev/null
+rm -f /data/adb/ap/bin/easytier-cli /data/adb/ap/bin/easytier 2>/dev/null
+
 # 使用 ${MODDIR:?} 确保变量非空，避免执行 rm -rf /*
 rm -rf "${MODDIR:?}/"*

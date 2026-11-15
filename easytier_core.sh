@@ -522,6 +522,10 @@ write_instances() {
                 }
             ' "$cfg" 2>/dev/null)
             [ -z "$RPC" ] && RPC="127.0.0.1:15888"
+            case "$RPC" in
+                0.0.0.0:*|\[::\]:*) RPC="127.0.0.1:${RPC##*:}" ;;
+                :*) RPC="127.0.0.1:${RPC##*:}" ;;
+            esac
             printf '%s\t%s\t%s\t%s\n' "$name" "$DEV" "$cfg" "$RPC" >> "$TMP"
             continue
         fi
@@ -541,6 +545,10 @@ write_instances() {
 
         RPC=$(toml_get "$cfg" rpc_portal)
         [ -z "$RPC" ] && RPC="127.0.0.1:1588$((IDX - 1))"
+        case "$RPC" in
+            0.0.0.0:*|\[::\]:*) RPC="127.0.0.1:${RPC##*:}" ;;
+            :*) RPC="127.0.0.1:${RPC##*:}" ;;
+        esac
 
         printf '%s\t%s\t%s\t%s\n' "$name" "$DEV" "$cfg" "$RPC" >> "$TMP"
     done < "$LISTF"

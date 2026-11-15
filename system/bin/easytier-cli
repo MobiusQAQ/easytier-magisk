@@ -1,5 +1,18 @@
 #!/system/bin/sh
 # EasyTier Magisk terminal entrypoint
+# 兼容 Termux / KernelSU / APatch / Magisk 各种终端与环境
+
+# 1. 若非 root 用户（例如普通 Termux 用户终端），自动提权至 root 执行
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v su >/dev/null 2>&1 || [ -x /system/bin/su ]; then
+        exec su 0 /system/bin/sh "$0" "$@" 2>/dev/null \
+            || exec su -c "exec /system/bin/sh '$0' $(for a in "$@"; do printf '%s ' "$a"; done)"
+    fi
+    echo "[EasyTier] 错误: 需要 root 权限以访问 EasyTier 模块，请先执行 su" >&2
+    exit 1
+fi
+
+# 2. 定位模块主目录并执行
 for d in /data/adb/modules/easytier_magisk /data/adb/modules_update/easytier_magisk; do
     if [ -f "$d/easytier-cli" ]; then
         exec /system/bin/sh "$d/easytier-cli" "$@"

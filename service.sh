@@ -4,6 +4,43 @@ MODDIR=${0%/*}
 chmod 755 ${MODDIR}/*
 chmod -R 755 ${MODDIR}/system/bin 2>/dev/null
 
+# 确保终端快捷命令在 Termux / KernelSU / APatch 就绪
+sync_cli_entrypoints() {
+    local target_src="${MODDIR}/system/bin/easytier-cli"
+    [ -f "$target_src" ] || return 0
+
+    local termux_bin="/data/data/com.termux/files/usr/bin"
+    if [ -d "$termux_bin" ]; then
+        if [ ! -f "${termux_bin}/easytier-cli" ] || [ ! -f "${termux_bin}/easytier" ]; then
+            cp -f "$target_src" "${termux_bin}/easytier-cli" 2>/dev/null || true
+            cp -f "$target_src" "${termux_bin}/easytier" 2>/dev/null || true
+            chmod 755 "${termux_bin}/easytier-cli" "${termux_bin}/easytier" 2>/dev/null || true
+            local t_owner
+            t_owner=$(stat -c '%u:%g' "$termux_bin" 2>/dev/null || true)
+            [ -n "$t_owner" ] && chown "$t_owner" "${termux_bin}/easytier-cli" "${termux_bin}/easytier" 2>/dev/null || true
+        fi
+    fi
+
+    local ksu_bin="/data/adb/ksu/bin"
+    if [ -d "$ksu_bin" ]; then
+        if [ ! -f "${ksu_bin}/easytier-cli" ]; then
+            cp -f "$target_src" "${ksu_bin}/easytier-cli" 2>/dev/null || true
+            ln -sf "easytier-cli" "${ksu_bin}/easytier" 2>/dev/null || cp -f "$target_src" "${ksu_bin}/easytier" 2>/dev/null || true
+            chmod 755 "${ksu_bin}/easytier-cli" "${ksu_bin}/easytier" 2>/dev/null || true
+        fi
+    fi
+
+    local ap_bin="/data/adb/ap/bin"
+    if [ -d "$ap_bin" ]; then
+        if [ ! -f "${ap_bin}/easytier-cli" ]; then
+            cp -f "$target_src" "${ap_bin}/easytier-cli" 2>/dev/null || true
+            ln -sf "easytier-cli" "${ap_bin}/easytier" 2>/dev/null || cp -f "$target_src" "${ap_bin}/easytier" 2>/dev/null || true
+            chmod 755 "${ap_bin}/easytier-cli" "${ap_bin}/easytier" 2>/dev/null || true
+        fi
+    fi
+}
+sync_cli_entrypoints
+
 # 等待系统启动成功
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
   sleep 5s

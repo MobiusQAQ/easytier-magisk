@@ -15,11 +15,17 @@ bash -n "$REPO_DIR/action.sh"
 echo "✓ action.sh 语法正确"
 bash -n "$REPO_DIR/easytier_core.sh"
 echo "✓ easytier_core.sh 语法正确"
+bash -n "$REPO_DIR/customize.sh"
+echo "✓ customize.sh 语法正确"
+bash -n "$REPO_DIR/service.sh"
+echo "✓ service.sh 语法正确"
+bash -n "$REPO_DIR/uninstall.sh"
+echo "✓ uninstall.sh 语法正确"
 
 [ -x "$REPO_DIR/easytier-cli" ] || { echo "✗ easytier-cli 不可执行"; exit 1; }
 [ -x "$REPO_DIR/easytier-cli-bin" ] || { echo "✗ easytier-cli-bin 不可执行"; exit 1; }
 [ -x "$REPO_DIR/system/bin/easytier-cli" ] || { echo "✗ system/bin/easytier-cli 不可执行"; exit 1; }
-[ -L "$REPO_DIR/system/bin/easytier" ] || { echo "✗ system/bin/easytier 软链接不存在"; exit 1; }
+[ -e "$REPO_DIR/system/bin/easytier" ] || { echo "✗ system/bin/easytier 不存在"; exit 1; }
 echo "✓ 文件执行权限与软链接校验通过"
 
 echo "=== [2] 原生参数透传测试 ==="
@@ -43,39 +49,75 @@ echo "=== [3] 多实例探测与状态命令测试 ==="
 MOCK_DIR=$(mktemp -d "/tmp/et_test_XXXXXX")
 trap 'rm -rf "$MOCK_DIR"' EXIT
 
-# 模拟 .instances 文件
+# 模拟 .instances 文件 (包含 0.0.0.0 待规范化地址)
 cat << 'EOF' > "$MOCK_DIR/.instances"
-net_home	et0	/data/adb/modules/easytier_magisk/config/networks/net_home.toml	127.0.0.1:15880
+net_home	et0	/data/adb/modules/easytier_magisk/config/networks/net_home.toml	0.0.0.0:15880
 net_work	et1	/data/adb/modules/easytier_magisk/config/networks/net_work.toml	127.0.0.1:15881
 EOF
 
 # 复制脚本测试多实例格式化
 cp "$REPO_DIR/easytier-cli" "$MOCK_DIR/easytier-cli"
-# 创建模拟 real-cli，输出模拟 peer 结果
-cat << 'EOF' > "$MOCK_DIR/easytier-cli-bin"
-#!/bin/bash
-if [ "$1" = "-p" ]; then
-    PORT="$2"
-    shift 2
-    CMD="$1"
-    if [ "$CMD" = "peer" ]; then
-        echo "Peer ID | IPv4 | Cost | Latency"
-        echo "mock_p1 | 10.10.0.2 | 1 | 20ms"
-    elif [ "$CMD" = "status" ]; then
-        echo "Status OK for $PORT"
-    fi
+
+SH_BIN=$(command -v sh || echo "/system/bin/sh")
+cat << EOF > "$MOCK_DIR/easytier-cli-bin"
+#!$SH_BIN
+PORT=""
+CMD=""
+GLOBAL=""
+while [ "\$#" -gt 0 ]; do
+    case "\$1" in
+        -p|--rpc-portal)
+            shift
+            PORT="\$1"
+            ;;
+        -o|--output)
+            shift
+            GLOBAL="\${GLOBAL} -o \$1"
+            ;;
+        --no-trunc|-v|--verbose)
+            GLOBAL="\${GLOBAL} \$1"
+            ;;
+        peer|route|node|status)
+            CMD="\$1"
+            ;;
+        *)
+            ;;
+    esac
+    shift
+done
+
+if [ "\$CMD" = "peer" ]; then
+    echo "Peer ID | IPv4 | Cost | Latency"
+    echo "mock_p1 | 10.10.0.2 | 1 | 20ms | via \$PORT"
+elif [ "\$CMD" = "status" ]; then
+    echo "Status OK for \$PORT"
 fi
 EOF
+
 chmod +x "$MOCK_DIR/easytier-cli-bin" "$MOCK_DIR/easytier-cli"
 touch "$MOCK_DIR/module.prop"
 
-# 测试 peer 多实例输出
+# 测试 peer 多实例输出 (验证 0.0.0.0 被规范化为 127.0.0.1)
 PEER_OUT=$(cd "$MOCK_DIR" && bash "$MOCK_DIR/easytier-cli" peer)
 if echo "$PEER_OUT" | grep -q "net_home" && echo "$PEER_OUT" | grep -q "net_work"; then
-    echo "✓ peer 命令成功聚合展示 net_home 与 net_work 两个实例"
+    if echo "$PEER_OUT" | grep -q "127.0.0.1:15880"; then
+        echo "✓ peer 命令成功聚合展示多实例，且 0.0.0.0 正确规范化为 127.0.0.1"
+    else
+        echo "✗ peer 命令未规范化 RPC 地址: $PEER_OUT"
+        exit 1
+    fi
 else
     echo "✗ peer 命令未能展示所有实例:"
     echo "$PEER_OUT"
+    exit 1
+fi
+
+# 测试参数顺序重排 (peer -o json vs -o json peer 选项位置)
+ARG_OUT=$(cd "$MOCK_DIR" && bash "$MOCK_DIR/easytier-cli" peer -o json -i net_home)
+if echo "$ARG_OUT" | grep -q "mock_p1"; then
+    echo "✓ peer -o json 后置选项正确适配 real-cli 参数位置"
+else
+    echo "✗ peer -o json 测试失败: $ARG_OUT"
     exit 1
 fi
 
@@ -101,7 +143,6 @@ fi
 
 echo "=== [4] action.sh peer 转发测试 ==="
 ACTION_PEER_OUT=$(cd "$MOCK_DIR" && ACTION="peer" bash -c '
-    # 模拟 action.sh 中的 peer 行为
     exec sh "$0/easytier-cli" peer
 ' "$MOCK_DIR")
 

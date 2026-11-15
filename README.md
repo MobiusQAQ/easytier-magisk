@@ -3,6 +3,20 @@
 基于官方 `EasyTier/EasyTier` 的 `easytier-contrib/easytier-magisk` v2.7.0 改造。
 核心二进制未做任何改动，只补脚本层缺失的能力。
 
+> ## 📱 v2.7.0-hs8：全面适配 Termux 终端与多环境即开即用
+>
+> 解决用户在 Termux 下输入 `easytier-cli peer` 报 command not found / inaccessible / 无输出的痛点：
+>
+> 1. **Termux 开箱即用（免手动提权）**：
+>    - 模块安装与启动时自动识别并注册 `easytier-cli` 与 `easytier` 至 `/data/data/com.termux/files/usr/bin/`。
+>    - 普通 Termux 终端用户直接输入 `easytier-cli peer` 或 `easytier status` 时，包装器自动通过 `su` 提升权限执行并输出结果，无需预先手动进入 `su`。
+> 2. **KernelSU 与 APatch 全局 CLI 支持**：
+>    - 同步安装至 `/data/adb/ksu/bin` 与 `/data/adb/ap/bin`，解决 KernelSU `kernel_umount` 特性导致应用隔离无法读取 `/system/bin` 挂载的问题。
+> 3. **RPC 地址规范化与 0.0.0.0 客户端连接修复**：
+>    - 修复配置文件或 .instances 中使用 `0.0.0.0:<port>` 时客户端直连报错 Connection refused 的问题，自动重定向至 `127.0.0.1:<port>` 回环接口。
+> 4. **CLI 参数解析自适应**：
+>    - 选项（如 `-o json`、`--no-trunc`）无论写在子命令前还是后（如 `easytier-cli peer -o json`），均自动调整传递给底层核心 CLI，杜绝 unexpected argument 报错。
+>
 > ## 💻 v2.7.0-hs7：终端 peer 状态一键查看与全局 CLI 工具
 >
 > 解决终端中无法直接执行 `easytier-cli peer` 或多网络实例下端口需手动指定的痛点：
@@ -268,7 +282,7 @@ echo main > /data/adb/modules/easytier_magisk/config/hotspot_instance
 
 ### 状态查看（终端命令行）
 
-现在可在任何终端（Termux / MT 管理器 / ADB Shell）获得类似原版 `easytier-cli` 的完整体验：
+现在可在任何终端（Termux / MT 管理器 / ADB Shell）获得类似原版 `easytier-cli` 的完整体验，在 Termux 下**直接输入命令即可**（已授权 Root 的 Termux 无需预先 `su`）：
 
 ```bash
 # 1. 查看所有实例加入的 Peer 节点状态（自动聚合多网络实例）

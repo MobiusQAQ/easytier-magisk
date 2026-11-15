@@ -18,7 +18,46 @@ ui_print "支持模块 WebUI 的管理器可直接打开配置界面；Magisk �
 ui_print "----------------------------------"
 ui_print "注意！启动参数文件中不能存在 \" 和 '，配置文件则没有这个限制"
 ui_print "----------------------------------"
-ui_print "终端状态查看命令（su 执行）："
+
+# 安装终端命令包装器与软链接（支持 Termux / KernelSU / APatch / Magisk）
+install_cli_entrypoints() {
+    local target_src="$MODPATH/system/bin/easytier-cli"
+    [ -f "$target_src" ] || return 0
+
+    # 1. Termux 环境支持
+    local termux_bin="/data/data/com.termux/files/usr/bin"
+    if [ -d "$termux_bin" ]; then
+        ui_print "- 正在为 Termux 安装 easytier-cli & easytier 终端命令..."
+        cp -f "$target_src" "${termux_bin}/easytier-cli" 2>/dev/null || true
+        cp -f "$target_src" "${termux_bin}/easytier" 2>/dev/null || true
+        chmod 755 "${termux_bin}/easytier-cli" "${termux_bin}/easytier" 2>/dev/null || true
+        local t_owner
+        t_owner=$(stat -c '%u:%g' "$termux_bin" 2>/dev/null || true)
+        [ -n "$t_owner" ] && chown "$t_owner" "${termux_bin}/easytier-cli" "${termux_bin}/easytier" 2>/dev/null || true
+    fi
+
+    # 2. KernelSU 环境支持
+    local ksu_bin="/data/adb/ksu/bin"
+    if [ -d "$ksu_bin" ]; then
+        ui_print "- 正在为 KernelSU 注册 easytier-cli & easytier 终端命令..."
+        cp -f "$target_src" "${ksu_bin}/easytier-cli" 2>/dev/null || true
+        ln -sf "easytier-cli" "${ksu_bin}/easytier" 2>/dev/null || cp -f "$target_src" "${ksu_bin}/easytier" 2>/dev/null || true
+        chmod 755 "${ksu_bin}/easytier-cli" "${ksu_bin}/easytier" 2>/dev/null || true
+    fi
+
+    # 3. APatch 环境支持
+    local ap_bin="/data/adb/ap/bin"
+    if [ -d "$ap_bin" ]; then
+        ui_print "- 正在为 APatch 注册 easytier-cli & easytier 终端命令..."
+        cp -f "$target_src" "${ap_bin}/easytier-cli" 2>/dev/null || true
+        ln -sf "easytier-cli" "${ap_bin}/easytier" 2>/dev/null || cp -f "$target_src" "${ap_bin}/easytier" 2>/dev/null || true
+        chmod 755 "${ap_bin}/easytier-cli" "${ap_bin}/easytier" 2>/dev/null || true
+    fi
+}
+
+install_cli_entrypoints
+
+ui_print "终端状态查看命令（Termux / 终端直接执行）："
 ui_print "  easytier-cli peer  : 查看所有实例加入的 peer 状态"
 ui_print "  easytier status    : 查看各实例运行概要与连接统计"
 ui_print "  action.sh peer     : 免重启现场诊断与 peer 查询"
