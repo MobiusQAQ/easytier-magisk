@@ -4,16 +4,6 @@
 # 自动探测单网络/多网络实例并路由到对应的 RPC 端口
 # 兼容 Termux、KernelSU、APatch、Magisk 各种终端与环境
 
-# 0. 若在终端中由非 root 用户（例如普通 Termux 用户）直接执行，自动尝试提权执行
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v su >/dev/null 2>&1 || [ -x /system/bin/su ]; then
-        exec su 0 /system/bin/sh "$0" "$@" 2>/dev/null \
-            || exec su -c "exec /system/bin/sh '$0' $(for a in "$@"; do printf '%s ' "$a"; done)"
-    fi
-    echo "[EasyTier] 错误: 需要 root 权限以访问 EasyTier 模块，请先执行 su" >&2
-    exit 1
-fi
-
 # 1. 定位模块主目录
 SCRIPT_DIR=$(CDPATH= cd "${0%/*}" 2>/dev/null && pwd -P)
 MODDIR=""
@@ -63,7 +53,7 @@ if [ "$HAS_RPC_ARG" = "1" ]; then
     exec "$REAL_CLI" "$@"
 fi
 
-# 3. 帮助与版本参数处理
+# 3. 帮助与版本参数优先处理（无需 root 提权）
 if [ "$#" -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ] || [ "$1" = "help" ]; then
     VER=$(grep '^version=' "${MODULE_PROP}" 2>/dev/null | cut -d= -f2)
     echo "================================================================================"
@@ -92,6 +82,20 @@ fi
 
 if [ "$1" = "-V" ] || [ "$1" = "--version" ]; then
     exec "$REAL_CLI" --version
+fi
+
+# 4. 若模块位于 /data/adb/ 且当前为非 root 用户（例如普通 Termux 用户），自动尝试 su 提权执行
+if [ "$(id -u)" -ne 0 ]; then
+    case "$MODDIR" in
+        /data/adb/*)
+            if command -v su >/dev/null 2>&1 || [ -x /system/bin/su ]; then
+                exec su 0 /system/bin/sh "$0" "$@" 2>/dev/null \
+                    || exec su -c "/system/bin/sh '$0' $(for a in "$@"; do printf '%s ' "$a"; done)" 2>/dev/null
+            fi
+            echo "[EasyTier] 错误: 需要 root 权限以访问 EasyTier 模块，请先执行 su" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 # 4. 解析包装器专属选项 (-i / --instance 等) 并分离全局参数与子命令

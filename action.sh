@@ -28,6 +28,14 @@ if [ "$ACTION" = "status" ] || [ "$ACTION" = "route" ] || [ "$ACTION" = "node" ]
     exec sh "${MODDIR}/easytier-cli" "$ACTION" "$@"
 fi
 
+# 支持 action.sh reconnect / refresh 强制刷新网络与 DNS 规则
+if [ "$ACTION" = "reconnect" ] || [ "$ACTION" = "refresh" ]; then
+    echo "[EasyTier] 正在重置并刷新策略路由与 DNS 规则..."
+    rm -f "${MODDIR}/.last_egress_iface" "${MODDIR}/.last_dns_table"
+    echo "[EasyTier] 刷新完成"
+    exit 0
+fi
+
 # 支持 action.sh debug 快速切换调试模式
 if [ "$ACTION" = "debug" ]; then
     if [ -f "$DEBUG_FLAG" ]; then

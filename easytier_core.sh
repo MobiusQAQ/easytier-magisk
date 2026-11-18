@@ -240,28 +240,15 @@ unbound_can_route() {
     return 0
 }
 
-# 是否给 easytier 加 --bind-device（默认开启）。
-#
-# ⚠️ 为什么默认开启、而不是"探测到有问题才开"：
-# hs4 早期版本只在「启动那一刻未绑定 socket 出不去」时才加 --bind-device。
-# 但真机案例证明这不够——启动时 WiFi 正常（未绑定的 socket 能出网），
-# 于是没加；几分钟后 WiFi 断开切到移动数据，netd 规则换成
-# `oif rmnet_data2` 形态，未绑定的 socket 立刻变成 101，
-# 所有 peer 同时掉线且再也连不回来（core 日志里 4 条 peer removed 同一秒发生）。
-#
-# 实测结论（netns + 真实 peer）：
-#   - 未绑定的 socket 在 Android oif 规则下拿到 101（内核直接拒发）；
-#   - bind_device=true 后同一个 peer 变成 "connect timeout"（SYN 已发出）；
-#   - 绑定后能真实连上 peer（new peer added）；
-#   - **网络切换（wlan0→rmnet）后自动跟随，无需重启进程**；
-#   - 在正常网络（main 表有默认路由）下同样能正常连 peer，无副作用；
-#   - 不影响 tun 建立与 [[proxy_network]] 热点代理。
-#
-# 所以一律开启更稳：它没有已知副作用，却能免疫切网。
+# 是否给 easytier 加 --bind-device
+# 
+# 默认保持关闭（同原版行为），允许 socket 在网络切换时随默认路由自由漂移，实现秒级重连；
+# 避免使用 SO_BINDTODEVICE 将 socket 强行锁死在已失效的物理网卡上导致掉线。
+# 仅当用户显式创建 enable_bind_device 开关时才注入 --bind-device。
 should_bind_device() {
-    # 用户显式关掉就不碰
     [ -f "${MODDIR}/disable_bind_device" ] && return 1
-    return 0
+    [ -f "${MODDIR}/enable_bind_device" ] && return 0
+    return 1
 }
 
 # ===== mesh 网段可达性修复 =====
@@ -670,16 +657,12 @@ start_instance() {
         fi
     fi
 
-    # 物理网卡绑定：未绑定 socket 在 Android 式路由下会 101 断网。
-    # 这是"本机有网但 easytier 连不上"最常见的原因。
+    # 物理网卡绑定：当且仅当用户显式开启 enable_bind_device 时启用。
+    # 原版 EasyTier 默认不绑定设备，切网时内核自动走新出口，恢复仅需 1~2 秒。
     BIND_DEV=$(egress_iface)
     if should_bind_device; then
         EXTRA="$EXTRA --bind-device true"
-        if unbound_can_route; then
-            log "实例 ${NAME} 绑定物理网卡${BIND_DEV:+ ${BIND_DEV}}（默认开启，免疫切网）"
-        else
-            log "检测到未绑定 socket 无法出网，实例 ${NAME} 绑定物理网卡 ${BIND_DEV}"
-        fi
+        log "实例 ${NAME} 绑定物理网卡${BIND_DEV:+ ${BIND_DEV}}（已启用 enable_bind_device 开关）"
     fi
 
     # fwmark 共存：每个进程都加，规则只需一条
@@ -739,15 +722,22 @@ while true; do
 
     # 默认出口网卡变化（WiFi <-> 移动数据切换）-> 重启所有实例。
     #
-    # 为什么必须重启：切网后 netd 会把规则换成 `oif <新网卡>` 形态，
-    # 旧进程即使开着 --bind-device 也仍绑定在已消失的网卡上，
-    # 结果是所有 peer 同时掉线且再也连不回来。
-    # （实测 --bind-device 能跟随"默认路由变化"，但无法跟随"网卡消失"，稳妥起见直接重启。）
+    # 默认出口网卡变化（WiFi <-> 移动数据切换）
+    # 原版机制：保持核心进程存活，不销毁 tun 与已有 socket，由协议层直接在几十毫秒~1秒内恢复连接；
+    # 仅动态刷新当前出口网卡的 DNS 放行规则与策略路由。
+    # 若特定 ROM 遇到极端异常需要硬重启进程，可创建 restart_on_network_change 开关。
     CUR_IFACE=$(egress_iface)
     LAST_IFACE=$(cat "${MODDIR}/.last_egress_iface" 2>/dev/null)
     if [ -n "$CUR_IFACE" ] && [ -n "$LAST_IFACE" ] && [ "$CUR_IFACE" != "$LAST_IFACE" ]; then
-        log "默认出口网卡变化 ${LAST_IFACE} -> ${CUR_IFACE}，重启所有实例"
-        kill_all
+        if [ -f "${MODDIR}/restart_on_network_change" ]; then
+            log "默认出口网卡变化 ${LAST_IFACE} -> ${CUR_IFACE}（启用了 restart_on_network_change 开关），重启所有实例"
+            kill_all
+        else
+            log "默认出口网卡变化 ${LAST_IFACE} -> ${CUR_IFACE}，立即刷新 DNS 与策略路由规则（保持核心在线，实现秒级重连）"
+            ensure_dns_rules
+            ensure_mesh_rules
+            [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+        fi
     fi
     [ -n "$CUR_IFACE" ] && printf '%s' "$CUR_IFACE" > "${MODDIR}/.last_egress_iface"
 
@@ -802,5 +792,5 @@ while true; do
     fi
 
     trim_log
-    sleep 10s
+    sleep 3s
 done

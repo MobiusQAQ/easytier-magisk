@@ -95,7 +95,7 @@ publish_release() {
     fi
 
     # 运行回归测试
-    for t in "${SCRIPT_DIR}/tests"/regression_*.sh "${SCRIPT_DIR}/tests"/peer_cli_test.sh; do
+    for t in "${SCRIPT_DIR}/tests"/*_test.sh; do
         if [ -f "$t" ]; then
             echo "==> Running test: $(basename "$t")..."
             bash "$t"

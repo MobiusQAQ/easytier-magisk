@@ -3,6 +3,22 @@
 基于官方 `EasyTier/EasyTier` 的 `easytier-contrib/easytier-magisk` v2.7.0 改造。
 核心二进制未做任何改动，只补脚本层缺失的能力。
 
+> ## ⚡ v2.7.0-hs9：网络切换秒级自愈恢复（对齐原版速度）
+>
+> 解决 WiFi ↔ 蜂窝移动数据网络切换时组网恢复速度慢（15~30 秒甚至掉线）的问题：
+>
+> 1. **默认禁用 `--bind-device` 物理网卡锁定（回归原版无缝自愈特性）**：
+>    - 原版 EasyTier 默认不使用 `SO_BINDTODEVICE` 绑定物理网卡，切网时 Linux 内核会根据新路由表自动选择活跃物理网卡发送 UDP 报文。
+>    - 此前版本默认注入 `--bind-device true` 导致套接字被强制绑定在旧网卡（如已断开的 `wlan0`），切网后报 `ENETUNREACH` 造成长达几十秒的死锁；现已恢复为默认不绑定，允许套接字在网络切换时随路由表自由漂移，实现与原版一致的 1~2 秒极速重连。
+> 2. **切网时保持核心在线，消除激进的进程全杀与冷启动延迟**：
+>    - 此前脚本在检测到默认出口网卡变化时调用 `kill_all` 杀死所有核心实例，导致 TUN 设备销毁、现有 TCP 连接断开并产生 10~25 秒的冷启动与 STUN 预热延迟。
+>    - 现优化为：切网时**持续保持各网络实例运行与 TUN 网卡在线**，仅即时刷新出口网卡对应的 DNS 放行规则与策略路由，使得对端节点仅在收到新地址报文后即可无缝恢复组网。
+> 3. **心跳感知周期从 10 秒优化为 3 秒**：
+>    - 守护循环探测间隔从 10s 压缩至 3s，结合 O(1) 进程健康度检测，网络变化感知与故障恢复更敏捷。
+> 4. **特殊环境兼容开关**：
+>    - 如需强制锁定物理网卡，可手动创建 `/data/adb/modules/easytier_magisk/enable_bind_device`；
+>    - 如特定极端 ROM 必须在切网时硬杀重启，可创建 `/data/adb/modules/easytier_magisk/restart_on_network_change`。
+>
 > ## 📱 v2.7.0-hs8：全面适配 Termux 终端与多环境即开即用
 >
 > 解决用户在 Termux 下输入 `easytier-cli peer` 报 command not found / inaccessible / 无输出的痛点：
