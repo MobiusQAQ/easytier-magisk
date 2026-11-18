@@ -59,7 +59,9 @@ ip netns exec client ping -c 3 -W 2 10.126.126.2 2>&1 | tail -4
 for f in /proc/sys/net/ipv4/conf/all/rp_filter /proc/sys/net/ipv4/conf/tun0/rp_filter; do echo 2 > "$f" 2>/dev/null; done
 
 echo "===== [6] 去掉 MASQUERADE(源IP=192.168.43.100 裸奔) 会怎样 ====="
-iptables -t nat -F POSTROUTING 2>/dev/null
+iptables -t nat -D POSTROUTING -s 192.168.43.0/24 -o tun0 -j MASQUERADE 2>/dev/null
+iptables -D FORWARD -i ph-ap -o tun0 -j ACCEPT 2>/dev/null
+iptables -D FORWARD -i tun0 -o ph-ap -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
 ip netns exec client ping -c 3 -W 2 10.126.126.2 2>&1 | tail -4
 
 echo "===== [7] 回环: client ping 手机自己 192.168.43.1 ====="

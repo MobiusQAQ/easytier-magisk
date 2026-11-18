@@ -176,6 +176,12 @@ set_nat_rules() {
     iptables -C FORWARD -j ET_FWD 2>/dev/null || \
         iptables -I FORWARD 1 -j ET_FWD
 
+    # 守护 Android 系统原生热点外网 NAT 链（避免意外被断开导致热点设备上不了外网）
+    if iptables -t nat -S tetherctrl_nat_POSTROUTING >/dev/null 2>&1; then
+        iptables -t nat -C POSTROUTING -j tetherctrl_nat_POSTROUTING 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -j tetherctrl_nat_POSTROUTING
+    fi
+
     # 先清空自定义链，避免每次刷新重复累积 MASQUERADE/FORWARD（幂等）
     iptables -t nat -F ET_NAT 2>/dev/null
     iptables -F ET_FWD 2>/dev/null
