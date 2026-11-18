@@ -94,8 +94,8 @@ publish_release() {
         exit 1
     fi
 
-    # 运行回归测试
-    for t in "${SCRIPT_DIR}/tests"/*_test.sh; do
+    # 运行离线回归测试（排除需要 root 权限的真机 netns 测试）
+    for t in "${SCRIPT_DIR}/tests"/regression_*.sh "${SCRIPT_DIR}/tests"/peer_cli_test.sh "${SCRIPT_DIR}/tests"/network_switch_test.sh; do
         if [ -f "$t" ]; then
             echo "==> Running test: $(basename "$t")..."
             bash "$t"
