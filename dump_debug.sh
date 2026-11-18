@@ -150,7 +150,7 @@ fi
         pid=$(cat "$f" 2>/dev/null)
         echo "--- 实例 $inst (PID: $pid) ---"
         if [ -d "/proc/$pid" ]; then
-            echo "cmdline: $(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+            echo "cmdline: $(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' 2>/dev/null)"
             echo "oom_score: $(cat "/proc/$pid/oom_score" 2>/dev/null), oom_score_adj: $(cat "/proc/$pid/oom_score_adj" 2>/dev/null)"
             grep -E 'State|VmRSS|Threads' "/proc/$pid/status" 2>/dev/null
         else

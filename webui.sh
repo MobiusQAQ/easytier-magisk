@@ -112,18 +112,10 @@ case "$1" in
         # 多实例下把所有 easytier-core 都杀掉会让其它网络一起断掉。
         KILLED=0
         TARGET_REAL=$(readlink -f "${TARGET}" 2>/dev/null || printf '%s' "${TARGET}")
-        for process_dir in /proc/[0-9]*; do
-            [ -r "${process_dir}/cmdline" ] || continue
-            CMDLINE=$(tr '\000' ' ' < "${process_dir}/cmdline" 2>/dev/null)
-            case "$CMDLINE" in
-                *easytier-core*) ;;
-                *) continue ;;
-            esac
-            case "$CMDLINE" in
-                *"-c ${TARGET} "*|*"-c ${TARGET_REAL} "*|*"-c ${TARGET}"|*"-c ${TARGET_REAL}")
-                    kill "${process_dir#/proc/}" 2>/dev/null && KILLED=1
-                    ;;
-            esac
+        for P in $(/system/bin/pgrep -f easytier-core 2>/dev/null || pgrep -f easytier-core 2>/dev/null); do
+            if grep -q -F "$TARGET" "/proc/$P/cmdline" 2>/dev/null || grep -q -F "$TARGET_REAL" "/proc/$P/cmdline" 2>/dev/null; then
+                kill "$P" 2>/dev/null && KILLED=1
+            fi
         done
         if [ "$KILLED" = "0" ] && ! in_networks_mode; then
             # 单实例兼容：拿不到精确匹配时回退到原来的全杀逻辑

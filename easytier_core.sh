@@ -51,12 +51,17 @@ debug_log() {
     echo "[ET-DEBUG] $(date '+%F %T') $1" >> "$LOG_FILE"
 }
 
-# log.log 是只追加的事件日志，长期运行会无限增长。
-# 超过 256KB 时只保留最后 500 行（相当于滚动），避免塞满 /data。
+# log.log 与 core-*.log 日志滚动修剪，避免长期运行或调试模式塞满 /data
 trim_log() {
-    [ -f "$LOG_FILE" ] || return 0
-    [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 262144 ] || return 0
-    tail -n 500 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
+    if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 262144 ]; then
+        tail -n 500 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
+    fi
+    for clog in "${MODDIR}"/core-*.log; do
+        [ -f "$clog" ] || continue
+        if [ "$(wc -c < "$clog" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+            tail -n 2000 "$clog" > "${clog}.tmp" 2>/dev/null && mv -f "${clog}.tmp" "$clog"
+        fi
+    done
 }
 
 # ===== 工具 =====
@@ -114,39 +119,38 @@ hotspot_instance_name() {
     fi
 }
 
-# 统计本模块实际在跑的实例数（按配置路径精确匹配，
-# 不会把系统里无关的 easytier-core 进程算进来）
+# 统计本模块实际在跑的实例数（极速无损统计，避免重复扫描与子进程膨胀）
 count_core() {
-    N=0
-    LISTF="${MODDIR}/.configlist.count"
-    list_configs > "$LISTF" 2>/dev/null
-    while IFS="$(printf '\t')" read -r name cfg; do
-        [ -z "$cfg" ] && continue
-        instance_running "$cfg" && N=$((N + 1))
-    done < "$LISTF"
-    rm -f "$LISTF"
-    printf '%s' "$N"
+    local n=0
+    for f in "${MODDIR}"/.pid-*; do
+        [ -f "$f" ] || continue
+        local p
+        p=$(cat "$f" 2>/dev/null)
+        if [ -n "$p" ] && [ -d "/proc/$p" ] && [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "easytier-core" ]; then
+            n=$((n + 1))
+        fi
+    done
+    printf '%s' "$n"
 }
 
 # 快速判断单个 PID 是否对应目标配置
 pid_matches_config() {
     PID="$1"; TARGET="$2"
     [ -n "$PID" ] && [ -d "/proc/$PID" ] || return 1
-    [ -r "/proc/$PID/cmdline" ] || return 1
-    CMD=$(tr '\000' ' ' < "/proc/$PID/cmdline" 2>/dev/null)
-    case "$CMD" in
-        *easytier-core*"-c ${TARGET} "*|*easytier-core*"-c ${TARGET}") return 0 ;;
-        *) return 1 ;;
-    esac
+    # 优先校验进程名称，非 easytier-core 立即跳过，避免无谓读取 cmdline
+    [ "$(cat "/proc/$PID/comm" 2>/dev/null)" = "easytier-core" ] || return 1
+    # 避免使用 tr 直接读取 procfs（Toybox tr 在目标进程并发死亡报错 ESRCH 时会陷入 100% CPU 死循环）
+    grep -q -F "$TARGET" "/proc/$PID/cmdline" 2>/dev/null
 }
 
 # 找出以某个配置文件启动的 easytier-core 进程 PID。
 # 优化：
 #   1. 优先查 .pid-* 记录，命中即 O(1) 返回，彻底杜绝轮询遍历 /proc 带来的性能卡顿
-#   2. 兜底逐个检查 /proc/<pid>/cmdline
+#   2. 次级兜底：使用 pgrep 精准定位系统中的 easytier-core 进程
+#   3. 终极兜底：仅对 comm 为 easytier-core 的进程进行匹配
 pids_for_config() {
     TARGET="$1"
-    # 优先查 pid 缓存文件
+    # 1. 优先查 pid 缓存文件
     for f in "${MODDIR}"/.pid-*; do
         [ -f "$f" ] || continue
         P=$(cat "$f" 2>/dev/null)
@@ -156,9 +160,16 @@ pids_for_config() {
         fi
     done
 
-    # 兜底：扫描 /proc
+    # 2. 次级兜底：使用 pgrep 直接定位 easytier-core 进程
+    if command -v pgrep >/dev/null 2>&1 || [ -x /system/bin/pgrep ]; then
+        for P in $(/system/bin/pgrep -f easytier-core 2>/dev/null || pgrep -f easytier-core 2>/dev/null); do
+            pid_matches_config "$P" "$TARGET" && echo "$P"
+        done
+        return 0
+    fi
+
+    # 3. 终极兜底：扫描 /proc，先校验 comm == easytier-core
     for pdir in /proc/[0-9]*; do
-        [ -r "${pdir}/cmdline" ] || continue
         P="${pdir#/proc/}"
         pid_matches_config "$P" "$TARGET" && echo "$P"
     done
@@ -678,7 +689,7 @@ start_instance() {
         LVL="debug"
         [ -f "$DEBUG_CONF" ] && LVL=$(awk -F= '/^[[:space:]]*CORE_LOG_LEVEL[[:space:]]*=/ {gsub(/["[:space:]]/, "", $2); print $2}' "$DEBUG_CONF" 2>/dev/null)
         [ -z "$LVL" ] && LVL="debug"
-        ENV_EXTRA="RUST_LOG=${LVL},easytier=trace"
+        ENV_EXTRA="RUST_LOG=${LVL}"
         debug_log "实例 ${NAME} 注入环境变量: ${ENV_EXTRA}"
     fi
 

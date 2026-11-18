@@ -31,7 +31,7 @@ jobs:
 
       - name: Run regression tests
         run: |
-          for t in tests/regression_*.sh tests/peer_cli_test.sh tests/network_switch_test.sh; do
+          for t in tests/regression_*.sh tests/peer_cli_test.sh tests/network_switch_test.sh tests/pid_match_test.sh; do
             if [ -f "$t" ]; then
               echo "Running $t..."
               bash "$t"
