@@ -11,6 +11,7 @@
 # 自动分配 dev_name / rpc_portal / instance_name，避免多实例互相踩踏。
 
 MODDIR=${0%/*}
+[ -f "${MODDIR}/module.prop" ] || MODDIR="/data/adb/modules/easytier_magisk"
 CONFIG_DIR="${MODDIR}/config"
 NETWORKS_DIR="${CONFIG_DIR}/networks"
 LEGACY_CONFIG="${CONFIG_DIR}/config.toml"
@@ -438,12 +439,16 @@ configured_dns_servers() {
 }
 
 flush_dns_rules() {
-    [ -f "$DNS_RULES_FILE" ] || return 0
-    while read -r pref ip; do
-        [ -n "$pref" ] && [ -n "$ip" ] || continue
-        ip rule del pref "$pref" to "${ip}/32" 2>/dev/null
-    done < "$DNS_RULES_FILE"
-    : > "$DNS_RULES_FILE"
+    if [ -f "$DNS_RULES_FILE" ]; then
+        while read -r pref ip; do
+            [ -n "$pref" ] && [ -n "$ip" ] || continue
+            ip rule del pref "$pref" to "${ip}/32" 2>/dev/null
+        done < "$DNS_RULES_FILE"
+        : > "$DNS_RULES_FILE"
+    fi
+    for ip in $(configured_dns_servers); do
+        ip rule del pref "$DNS_RULE_PREF" to "${ip}/32" 2>/dev/null || true
+    done
 }
 
 # 确保每个配置的 DNS 服务器均有直达物理出口表的路由规则。
@@ -456,16 +461,17 @@ ensure_dns_rules() {
     [ -n "$TBL" ] || return 0
 
     LAST_TBL=$(cat "${MODDIR}/.last_dns_table" 2>/dev/null)
-    if [ -n "$LAST_TBL" ] && [ "$TBL" != "$LAST_TBL" ]; then
+    if [ "$TBL" != "$LAST_TBL" ]; then
         flush_dns_rules
     fi
     printf '%s' "$TBL" > "${MODDIR}/.last_dns_table"
 
     N=0
     for ip in $(configured_dns_servers); do
-        if ip rule show 2>/dev/null | grep -qE "^${DNS_RULE_PREF}:.*to ${ip}([ /]|$)"; then
+        if ip rule show 2>/dev/null | grep -qE "^${DNS_RULE_PREF}:.*to ${ip}([ /]|$).*lookup ${TBL}([ /]|$)"; then
             continue
         fi
+        ip rule del pref "$DNS_RULE_PREF" to "${ip}/32" 2>/dev/null || true
         if ip rule add pref "$DNS_RULE_PREF" to "${ip}/32" lookup "$TBL" 2>/dev/null; then
             printf '%s %s\n' "$DNS_RULE_PREF" "$ip" >> "$DNS_RULES_FILE"
             N=$((N + 1))
