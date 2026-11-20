@@ -26,6 +26,9 @@ EASYTIER="${MODDIR}/easytier-core"
 HOTSPOT_CIDR_FILE="${MODDIR}/.hotspot_cidr"
 DEBUG_CONF="${CONFIG_DIR}/debug.conf"
 DEBUG_FLAG="${MODDIR}/enable_debug"
+CLI_BIN="${MODDIR}/easytier-cli-bin"
+[ -x "$CLI_BIN" ] || CLI_BIN="${MODDIR}/easytier-cli"
+DAEMON_PID_FILE="${MODDIR}/.daemon.pid"
 
 BRAND=$(getprop ro.product.brand 2>/dev/null | tr ' ' '-')
 MODEL=$(getprop ro.product.model 2>/dev/null | tr ' ' '-')
@@ -111,15 +114,15 @@ is_args_config() { [ "$1" = "$COMMAND_ARGS" ]; }
 
 # 热点出口实例名
 hotspot_instance_name() {
-    H=$(head -n1 "$HOTSPOT_INSTANCE_FILE" 2>/dev/null | tr -d ' \t\r\n')
-    if [ -n "$H" ]; then
+    H=$(grep -vE '^[[:space:]]*(#|$)' "$HOTSPOT_INSTANCE_FILE" 2>/dev/null | head -n1 | tr -d ' \t\r\n')
+    if [ -n "$H" ] && { [ -f "${NETWORKS_DIR}/${H}.toml" ] || grep -qE "^${H}[[:space:]]" "$INSTANCES_FILE" 2>/dev/null; }; then
         printf '%s' "$H"
     else
         list_configs | head -n1 | cut -f1
     fi
 }
 
-# 统计本模块实际在跑的实例数（极速无损统计，避免重复扫描与子进程膨胀）
+# 统计本模块实际在跑的实例数（极速无损统计，避免重复扫描与子进程膨胀，自动回收失效 pid）
 count_core() {
     local n=0
     for f in "${MODDIR}"/.pid-*; do
@@ -128,6 +131,8 @@ count_core() {
         p=$(cat "$f" 2>/dev/null)
         if [ -n "$p" ] && [ -d "/proc/$p" ] && [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "easytier-core" ]; then
             n=$((n + 1))
+        else
+            rm -f "$f" 2>/dev/null
         fi
     done
     printf '%s' "$n"
@@ -157,13 +162,20 @@ pids_for_config() {
         if pid_matches_config "$P" "$TARGET"; then
             echo "$P"
             return 0
+        else
+            if [ -n "$P" ] && [ ! -d "/proc/$P" ]; then
+                rm -f "$f" 2>/dev/null
+            fi
         fi
     done
 
     # 2. 次级兜底：使用 pgrep 直接定位 easytier-core 进程
     if command -v pgrep >/dev/null 2>&1 || [ -x /system/bin/pgrep ]; then
         for P in $(/system/bin/pgrep -f easytier-core 2>/dev/null || pgrep -f easytier-core 2>/dev/null); do
-            pid_matches_config "$P" "$TARGET" && echo "$P"
+            if pid_matches_config "$P" "$TARGET"; then
+                echo "$P"
+                return 0
+            fi
         done
         return 0
     fi
@@ -171,7 +183,10 @@ pids_for_config() {
     # 3. 终极兜底：扫描 /proc，先校验 comm == easytier-core
     for pdir in /proc/[0-9]*; do
         P="${pdir#/proc/}"
-        pid_matches_config "$P" "$TARGET" && echo "$P"
+        if pid_matches_config "$P" "$TARGET"; then
+            echo "$P"
+            return 0
+        fi
     done
 }
 
@@ -206,33 +221,66 @@ kill_all() {
 
 # ===== 物理网卡 / 出网可用性 =====
 
-# 系统当前用来出网的物理网卡（默认路由所在接口）。
-# Android 的 main 表通常没有默认路由，默认路由在 netd 的具名表里，
-# 所以 `ip route get` 出来的 dev 就是当前"活跃"网卡，这里据此判断。
-egress_iface() {
-    # 技巧 1：优先 ip route get（快，且给出"此刻真的会走哪块"）
-    D=$(ip route get 8.8.8.8 2>/dev/null \
-        | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
-    case "$D" in
-        et*|tun*|dummy*|lo|"") D="" ;;
-        *) printf '%s' "$D"; return 0 ;;
-    esac
+# 系统当前物理出口特征：网卡 路由表 源IP
+# 相比单网卡名，能精准捕捉同网卡重连（如 WiFi 漫游、基站切新内网IP、Android netd 重建路由表）
+egress_info() {
+    # 策略 1：优先通过 ip route get 8.8.8.8 获取当前生效出口特征
+    D=$(ip route get 8.8.8.8 2>/dev/null | awk '
+        {
+            for (i = 1; i < NF; i++) {
+                if ($i == "dev") dev = $(i + 1)
+                if ($i == "table") tbl = $(i + 1)
+                if ($i == "src") src = $(i + 1)
+            }
+            if (dev != "" && dev !~ /^(et|tun|dummy|lo)/) {
+                print dev, (tbl != "" ? tbl : "main"), (src != "" ? src : "none")
+                exit
+            }
+        }
+    ')
+    if [ -n "$D" ]; then
+        printf '%s' "$D"
+        return 0
+    fi
 
-    # 技巧 2：Android 上 main 表往往是空的，默认路由在 netd 的具名表里。
-    # 扫所有表里的 default 路由，排除虚拟/回环网卡。
+    # 策略 2：兜底扫描系统默认路由
     ip route show table all 2>/dev/null | awk '
         /^default/ {
             for (i = 1; i < NF; i++) {
                 if ($i == "dev") {
                     dev = $(i + 1)
                     if (dev !~ /^(et|tun|dummy|lo)/) {
-                        print dev
+                        tbl = ""
+                        for (j = 1; j < NF; j++) if ($j == "table") tbl = $(j + 1)
+                        print dev, (tbl != "" ? tbl : "main"), "none"
                         exit
                     }
                 }
             }
         }
     '
+}
+
+# 系统当前用来出网的物理网卡（默认路由所在接口）。
+egress_iface() {
+    egress_info | awk '{print $1}'
+}
+
+# 触发所有实例进行一次 STUN 刷新（快速上报新公网 IP/端口至中心节点）
+trigger_stun_refresh() {
+    [ -x "$CLI_BIN" ] || return 0
+    [ -f "$INSTANCES_FILE" ] || return 0
+    # 防抖：若已存在活跃的 stun 探测，不重复堆叠并发
+    if pgrep -f "easytier-cli.*stun" >/dev/null 2>&1; then
+        return 0
+    fi
+    debug_log "触发所有运行中实例的 STUN 刷新以加速恢复网络..."
+    for irpc in $(awk -F'\t' '{print $4}' "$INSTANCES_FILE" 2>/dev/null); do
+        [ -n "$irpc" ] || continue
+        (
+            "$CLI_BIN" -p "$irpc" stun >/dev/null 2>&1
+        ) &
+    done
 }
 
 # 这个内核上"未绑定网卡的 socket 能否出网"。
@@ -429,7 +477,13 @@ ensure_dns_rules() {
 
 # 找到当前物理出口网卡对应的具名/编号路由表，用于 DNS 放行
 route_table_for_egress() {
-    CUR=$(egress_iface)
+    INFO=$(egress_info)
+    TBL=$(printf '%s' "$INFO" | awk '{print $2}')
+    if [ -n "$TBL" ] && [ "$TBL" != "main" ] && [ "$TBL" != "none" ]; then
+        printf '%s' "$TBL"
+        return 0
+    fi
+    CUR=$(printf '%s' "$INFO" | awk '{print $1}')
     [ -n "$CUR" ] || return 1
 
     # 优先：从路由表中查找绑定该网卡的 default 路由表
@@ -552,7 +606,12 @@ write_instances() {
     done < "$LISTF"
 
     rm -f "$LISTF"
-    mv -f "$TMP" "$INSTANCES_FILE" 2>/dev/null
+    # 只有内容发生实质变化才覆盖写入，避免频繁刷写闪存与唤醒 I/O
+    if [ ! -f "$INSTANCES_FILE" ] || ! cmp -s "$TMP" "$INSTANCES_FILE" 2>/dev/null; then
+        mv -f "$TMP" "$INSTANCES_FILE" 2>/dev/null
+    else
+        rm -f "$TMP" 2>/dev/null
+    fi
 }
 
 get_tun_iface_lazy() {
@@ -706,6 +765,38 @@ start_instance() {
     done
 }
 
+# 单例保护：确保只有一个守护循环在运行，杜绝并发竞争与僵尸进程
+acquire_daemon_lock() {
+    if [ -f "$DAEMON_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null | tr -d ' \r\n')
+        if [ -n "$old_pid" ] && [ "$old_pid" != "$$" ] && [ -d "/proc/$old_pid" ]; then
+            if grep -q -F "easytier_core.sh" "/proc/$old_pid/cmdline" 2>/dev/null; then
+                log "终止旧守护进程 (PID $old_pid)，接管后台守护"
+                kill -9 "$old_pid" 2>/dev/null
+            fi
+        fi
+    fi
+    echo "$$" > "$DAEMON_PID_FILE"
+}
+
+# 支持 --refresh-network 命令行快速刷新网络与 DNS（供 action.sh reconnect / 脚本直接调用）
+if [ "${1:-}" = "--refresh-network" ]; then
+    rm -f "${MODDIR}/.last_dns_table" "${MODDIR}/.last_egress_info" "${MODDIR}/.last_egress_iface"
+    ensure_dns_rules
+    ensure_mesh_rules
+    [ "$COEXIST_ENABLE" = "1" ] && [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+    trigger_stun_refresh
+    exit 0
+fi
+
+# 启动守护单例锁定
+acquire_daemon_lock
+trap 'rm -f "${DAEMON_PID_FILE}" 2>/dev/null' EXIT INT TERM
+
+# 启动初始共存检查
+[ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+
 # ===== 主循环 =====
 HOTSPOT_NAME=$(hotspot_instance_name)
 
@@ -731,25 +822,27 @@ while true; do
         kill_all
     fi
 
-    # 默认出口网卡变化（WiFi <-> 移动数据切换）-> 重启所有实例。
-    #
-    # 默认出口网卡变化（WiFi <-> 移动数据切换）
-    # 原版机制：保持核心进程存活，不销毁 tun 与已有 socket，由协议层直接在几十毫秒~1秒内恢复连接；
-    # 仅动态刷新当前出口网卡的 DNS 放行规则与策略路由。
+    # 默认出口网卡/路由特征变化（WiFi <-> 移动数据切换 / WiFi 漫游切网）
+    # 机制：保持核心进程存活，不销毁 tun 与已有 socket，由协议层直接在几十毫秒~1秒内恢复连接；
+    # 仅动态刷新当前出口网卡的 DNS 放行规则与策略路由，并并发触发 STUN 探测快速建立打洞。
     # 若特定 ROM 遇到极端异常需要硬重启进程，可创建 restart_on_network_change 开关。
-    CUR_IFACE=$(egress_iface)
-    LAST_IFACE=$(cat "${MODDIR}/.last_egress_iface" 2>/dev/null)
-    if [ -n "$CUR_IFACE" ] && [ -n "$LAST_IFACE" ] && [ "$CUR_IFACE" != "$LAST_IFACE" ]; then
+    CUR_EGRESS_INFO=$(egress_info)
+    CUR_IFACE=$(printf '%s' "$CUR_EGRESS_INFO" | awk '{print $1}')
+    LAST_EGRESS_INFO=$(cat "${MODDIR}/.last_egress_info" 2>/dev/null || true)
+    if [ -n "$CUR_IFACE" ] && [ -n "$LAST_EGRESS_INFO" ] && [ "$CUR_EGRESS_INFO" != "$LAST_EGRESS_INFO" ]; then
         if [ -f "${MODDIR}/restart_on_network_change" ]; then
-            log "默认出口网卡变化 ${LAST_IFACE} -> ${CUR_IFACE}（启用了 restart_on_network_change 开关），重启所有实例"
+            log "物理出口网络变化 [${LAST_EGRESS_INFO}] -> [${CUR_EGRESS_INFO}]（启用了 restart_on_network_change 开关），重启所有实例"
             kill_all
         else
-            log "默认出口网卡变化 ${LAST_IFACE} -> ${CUR_IFACE}，立即刷新 DNS 与策略路由规则（保持核心在线，实现秒级重连）"
+            log "物理出口网络变化 [${LAST_EGRESS_INFO}] -> [${CUR_EGRESS_INFO}]，立即刷新 DNS 与策略路由并触发 STUN 快速重连"
+            rm -f "${MODDIR}/.last_dns_table"
             ensure_dns_rules
             ensure_mesh_rules
-            [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+            [ "$COEXIST_ENABLE" = "1" ] && [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+            trigger_stun_refresh
         fi
     fi
+    [ -n "$CUR_IFACE" ] && printf '%s' "$CUR_EGRESS_INFO" > "${MODDIR}/.last_egress_info"
     [ -n "$CUR_IFACE" ] && printf '%s' "$CUR_IFACE" > "${MODDIR}/.last_egress_iface"
 
     # 无配置
@@ -764,23 +857,24 @@ while true; do
     # 刷新热点 CIDR
     [ -x "$HOTSPOT_SCRIPT" ] && "$HOTSPOT_SCRIPT" probe >/dev/null 2>&1
 
-    # 共存规则先就位（verify 依赖 ip rule）
-    [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
+    # 共存规则（仅在明确启用时维护）
+    [ "$COEXIST_ENABLE" = "1" ] && [ -x "$COEXIST_SCRIPT" ] && "$COEXIST_SCRIPT" apply >/dev/null 2>&1
 
     # DNS 放行规则：域名 peer 解析失败（code 101）的根因修复
     ensure_dns_rules
 
     # mesh 网段规则：App ping 不通虚拟 IP 的根因修复
-    # 放在启动之后立刻补一次：首轮 tun 还没 up，等下一轮会白等 10 秒
     ensure_mesh_rules
 
     write_instances
 
-    # 逐个检查并拉起
-    STARTED=0
+    # 逐个检查并拉起，同步实时 PID
     list_configs | while IFS="$(printf '\t')" read -r name cfg; do
         [ -z "$name" ] && continue
-        if ! instance_running "$cfg"; then
+        PID=$(pids_for_config "$cfg")
+        if [ -n "$PID" ]; then
+            echo "$PID" > "${MODDIR}/.pid-${name}"
+        else
             start_instance "$name" "$cfg"
             sleep 2s
         fi

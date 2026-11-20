@@ -64,6 +64,14 @@ sed -i 's/$(description=)$[^"]*/\1[状态]关闭中/' "$MODDIR/module.prop"
 # 等待 3 秒
 sleep 3s
 
+# 启动前清理残留的历史守护脚本，避免多重循环累积与重复执行
+for p in $(pgrep -f "${MODDIR}/easytier_core.sh" 2>/dev/null); do
+    [ "$p" != "$$" ] && kill -9 "$p" 2>/dev/null
+done
+for p in $(pgrep -f "${MODDIR}/hotspot_iprule.sh" 2>/dev/null); do
+    [ "$p" != "$$" ] && kill -9 "$p" 2>/dev/null
+done
+
 "${MODDIR}/easytier_core.sh" &
 "${MODDIR}/hotspot_iprule.sh" add &
 

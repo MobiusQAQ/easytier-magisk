@@ -215,6 +215,9 @@ collect_instances() {
             local pid=""
             if [ -f "${MODDIR}/.pid-${iname}" ]; then
                 pid=$(cat "${MODDIR}/.pid-${iname}" 2>/dev/null | tr -d ' \r\n')
+                if [ -n "$pid" ] && [ ! -d "/proc/$pid" ]; then
+                    pid=""
+                fi
             fi
             printf '%s\t%s\t%s\t%s\t%s\n' "$iname" "${idev:-auto}" "${icfg:-}" "$irpc" "${pid:-}"
         done < "$INSTANCES_FILE"

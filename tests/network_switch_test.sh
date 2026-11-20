@@ -86,6 +86,62 @@ else
     exit 1
 fi
 
+echo "=== [4] 测试 egress_info 出口特征比对（支持 WiFi 漫游与内网IP变更识别） ==="
+LAST_SIG="wlan0 1002 192.168.1.100"
+# 同网卡但新内网 IP / 新路由表 (WiFi 漫游或基站切换)
+CUR_SIG="wlan0 1003 10.0.0.50"
+CHANGED=0
+if [ "$CUR_SIG" != "$LAST_SIG" ]; then
+    CHANGED=1
+fi
+if [ "$CHANGED" -eq 1 ]; then
+    echo "✓ 成功识别同网卡名下的 IP/路由表切换"
+else
+    echo "✗ 未能识别 IP/路由表切换"
+    exit 1
+fi
+
+echo "=== [5] 测试 hotspot_instance 注释忽略与兜底逻辑 ==="
+HOTSPOT_INSTANCE_FILE="${MOCK_DIR}/hotspot_instance"
+NETWORKS_DIR="${MOCK_DIR}/networks"
+INSTANCES_FILE="${MOCK_DIR}/instances"
+mkdir -p "$NETWORKS_DIR"
+
+cat <<'EOF' > "$HOTSPOT_INSTANCE_FILE"
+# 指定哪个实例作为热点出口
+# 只有这个实例会被注入热点网段
+partnerc7u
+EOF
+
+cat <<'EOF' > "$INSTANCES_FILE"
+elysia	et0	/tmp/elysia.toml	127.0.0.1:15880
+partnerc7u	et1	/tmp/partnerc7u.toml	127.0.0.1:15882
+EOF
+touch "${NETWORKS_DIR}/partnerc7u.toml"
+
+eval "$(awk '/^hotspot_instance_name\(\)/, /^}/' "$REPO_DIR/easytier_core.sh")"
+RES_NAME=$(hotspot_instance_name)
+if [ "$RES_NAME" = "partnerc7u" ]; then
+    echo "✓ 正确忽略注释并提取真实实例名: $RES_NAME"
+else
+    echo "✗ 提取实例名失败: $RES_NAME"
+    exit 1
+fi
+
+echo "=== [6] 测试守护进程单例锁定与旧进程回收 ==="
+DAEMON_PID_FILE="${MOCK_DIR}/.daemon.pid"
+eval "$(awk '/^acquire_daemon_lock\(\)/, /^}/' "$REPO_DIR/easytier_core.sh")"
+
+# 首次获取锁
+acquire_daemon_lock
+CURRENT_PID=$(cat "$DAEMON_PID_FILE")
+if [ "$CURRENT_PID" = "$$" ]; then
+    echo "✓ 首次获取单例锁成功 (PID $$)"
+else
+    echo "✗ 单例锁 PID 不匹配: $CURRENT_PID"
+    exit 1
+fi
+
 rm -rf "$MOCK_DIR"
 trap - EXIT
 

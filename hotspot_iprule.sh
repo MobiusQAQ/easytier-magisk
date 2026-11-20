@@ -11,8 +11,11 @@ HOTSPOT_INSTANCE_FILE="${MODDIR}/config/hotspot_instance"
 # 获取接口/IP
 # 热点出口实例名（config/hotspot_instance 的内容，缺省取第一个实例）
 hotspot_name() {
-    H=$(head -n1 "$HOTSPOT_INSTANCE_FILE" 2>/dev/null | tr -d ' \t\r\n')
-    [ -n "$H" ] && { printf '%s' "$H"; return; }
+    H=$(grep -vE '^[[:space:]]*(#|$)' "$HOTSPOT_INSTANCE_FILE" 2>/dev/null | head -n1 | tr -d ' \t\r\n')
+    if [ -n "$H" ] && [ -f "$INSTANCES_FILE" ] && awk -F'\t' -v n="$H" '$1 == n { exit 0 } END { exit 1 }' "$INSTANCES_FILE"; then
+        printf '%s' "$H"
+        return
+    fi
     [ -f "$INSTANCES_FILE" ] && awk -F'\t' 'NR == 1 { print $1; exit }' "$INSTANCES_FILE"
 }
 
@@ -234,6 +237,18 @@ clean_rules() {
 
 case "$ACTION" in
     add)
+        HOTSPOT_DAEMON_PID_FILE="${MODDIR}/.hotspot_daemon.pid"
+        if [ -f "$HOTSPOT_DAEMON_PID_FILE" ]; then
+            OLD_PID=$(cat "$HOTSPOT_DAEMON_PID_FILE" 2>/dev/null | tr -d ' \r\n')
+            if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "$$" ] && [ -d "/proc/$OLD_PID" ]; then
+                if grep -q -F "hotspot_iprule.sh" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
+                    kill -9 "$OLD_PID" 2>/dev/null
+                fi
+            fi
+        fi
+        echo "$$" > "$HOTSPOT_DAEMON_PID_FILE"
+        trap 'rm -f "${HOTSPOT_DAEMON_PID_FILE}" 2>/dev/null' EXIT INT TERM
+
         probe_cidrs
         # 只有用户显式开启转发（enable_IP_rule）才建 NAT 规则，
         # 避免没开功能时也往 POSTROUTING/FORWARD 里插钩子
